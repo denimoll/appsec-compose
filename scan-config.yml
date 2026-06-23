@@ -1,0 +1,36 @@
+# =====================================================================
+# appsec-compose — the single config file you edit.
+# Run with:  ./run.sh /path/to/repo
+# =====================================================================
+
+# ---- Scanners --------------------------------------------------------
+# Toggle each check on/off and pin its image version (bump to upgrade).
+# The category each tool covers is in the comment.
+scanners:
+  semgrep:                 # SAST  (source code vulnerabilities)
+    enabled: true
+    version: "1.97.0"
+
+  trivy:                   # SCA + IaC + SBOM (dependencies, Dockerfile/TF, components)
+    enabled: true
+    version: "0.58.0"
+
+  gitleaks:                # Secret scanning (tokens/keys in code)
+    enabled: true
+    version: "v8.21.2"
+
+  checkov:                 # IaC (deeper policy coverage than Trivy)
+    enabled: true
+    version: "3.2.334"
+
+# ---- Extra artifacts -------------------------------------------------
+sbom: true                 # CycloneDX SBOM via Trivy -> reports/sbom.cdx.json
+                           # (only produced when `trivy` is enabled)
+
+# ---- Policy (drives the CI exit code) --------------------------------
+fail_on: high              # critical | high | medium | low | none  (none = report-only)
+unknown_severity: medium   # how to rank findings that carry no severity
+
+# ---- Offline / air-gapped --------------------------------------------
+offline: true             # true => use DBs/rules preloaded by ./preload.sh,
+                           #         no network downloads during the scan

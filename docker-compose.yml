@@ -1,0 +1,102 @@
+# appsec-compose — one-command OSS AppSec scan.
+#
+# Driven by ./run.sh, which renders scan-config.yml into .env (image versions +
+# online/offline flags) and runs only the enabled scanners followed by the
+# collector. Each scanner is a one-shot service that writes a native report into
+# the shared ./reports volume and ALWAYS exits 0 (findings never break the scan
+# phase). The collector normalizes the reports and decides pass/fail — its exit
+# code is the only meaningful one.
+#
+# Image versions and the *_RULES / *_FLAGS below come from .env (see
+# scripts/render-env.py); the defaults here keep raw `docker compose` working.
+
+name: appsec-compose
+
+x-code-mount: &code-mount
+  type: bind
+  source: ${SCAN_TARGET:?set SCAN_TARGET to the absolute path of the repo to scan}
+  target: /code
+  read_only: true
+
+services:
+  # ---- SAST -------------------------------------------------------------
+  semgrep:
+    image: semgrep/semgrep:${SEMGREP_VERSION:-1.97.0}
+    entrypoint: ["/bin/sh", "-c"]
+    # Single list item => the whole script is passed as one arg to `sh -c`.
+    # SEMGREP_RULES = `p/default` online (curated multi-language pack, no
+    # telemetry/login) or a preloaded local YAML when offline.
+    command:
+      - >-
+        semgrep scan --config "${SEMGREP_RULES:-p/default}" --metrics off
+        --sarif --output /reports/native/semgrep.sarif /code || true
+    volumes:
+      - *code-mount
+      - ./reports:/reports
+      - ./cache/semgrep:/cache/semgrep
+
+  # ---- SCA + IaC + SBOM (Trivy covers all three) ------------------------
+  trivy:
+    image: aquasec/trivy:${TRIVY_VERSION:-0.58.0}
+    entrypoint: ["/bin/sh", "-c"]
+    # TRIVY_DB_FLAGS is empty online, or skip-update/offline-scan when offline.
+    # ASS_SBOM toggles the CycloneDX SBOM step.
+    command:
+      - |
+        trivy fs --quiet ${TRIVY_DB_FLAGS:-} --scanners vuln,secret --format sarif --output /reports/native/trivy-fs.sarif /code
+        trivy config --quiet --format sarif --output /reports/native/trivy-config.sarif /code
+        [ "${ASS_SBOM:-1}" = "1" ] && trivy fs --quiet ${TRIVY_DB_FLAGS:-} --format cyclonedx --output /reports/sbom.cdx.json /code || true
+    environment:
+      TRIVY_DB_FLAGS: ${TRIVY_DB_FLAGS:-}
+      ASS_SBOM: ${ASS_SBOM:-1}
+    volumes:
+      - *code-mount
+      - ./reports:/reports
+      - ./cache/trivy:/root/.cache/trivy
+
+  # ---- Secrets ----------------------------------------------------------
+  gitleaks:
+    image: zricethezav/gitleaks:${GITLEAKS_VERSION:-v8.21.2}
+    # entrypoint is `gitleaks`; --exit-code 0 keeps the container green on leaks.
+    command:
+      - detect
+      - --source=/code
+      - --no-git
+      - --report-format=sarif
+      - --report-path=/reports/native/gitleaks.sarif
+      - --exit-code=0
+    volumes:
+      - *code-mount
+      - ./reports:/reports
+
+  # ---- IaC (deeper policy coverage than Trivy config) -------------------
+  checkov:
+    image: bridgecrew/checkov:${CHECKOV_VERSION:-3.2.334}
+    entrypoint: ["/bin/sh", "-c"]
+    # checkov prints an ASCII banner to stdout, so we can't redirect stdout to
+    # the report. Write to a dir (clean `results_sarif.sarif`) and rename it.
+    command:
+      - >-
+        checkov -d /code --soft-fail --compact -o sarif
+        --output-file-path /reports/native/_checkov >/dev/null 2>&1 || true ;
+        mv /reports/native/_checkov/results_sarif.sarif /reports/native/checkov.sarif 2>/dev/null || true ;
+        rm -rf /reports/native/_checkov
+    volumes:
+      - *code-mount
+      - ./reports:/reports
+
+  # ---- Collector / orchestrator ----------------------------------------
+  # run.sh invokes this with `--no-deps` after the enabled scanners finish.
+  # depends_on is kept so a raw `docker compose run collector` still works.
+  collector:
+    build: ./orchestrator
+    depends_on:
+      semgrep:  { condition: service_completed_successfully }
+      trivy:    { condition: service_completed_successfully }
+      gitleaks: { condition: service_completed_successfully }
+      checkov:  { condition: service_completed_successfully }
+    environment:
+      FAIL_ON: ${FAIL_ON:-}
+    volumes:
+      - ./reports:/reports
+      - ./scan-config.yml:/app/scan-config.yml:ro
