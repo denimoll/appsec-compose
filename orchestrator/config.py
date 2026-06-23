@@ -18,6 +18,7 @@ _VALID_FAIL_ON = set(SEVERITY_ORDER) | {"none"}
 class Config:
     fail_on: str = "high"
     unknown_severity: str = "medium"
+    dedup: bool = True
     scanners: dict = field(default_factory=dict)
 
     @property
@@ -35,6 +36,7 @@ def load_config(path: str = "/app/scan-config.yml") -> Config:
     cfg = Config(
         fail_on=str(raw.get("fail_on", "high")).lower(),
         unknown_severity=str(raw.get("unknown_severity", "medium")).lower(),
+        dedup=bool(raw.get("dedup", True)),
         scanners=raw.get("scanners", {}) or {},
     )
 

@@ -1,40 +1,46 @@
-"""Normalize heterogeneous SARIF reports into a single findings model.
+"""Normalize heterogeneous scanner reports into a single findings model.
 
-Every supported scanner can emit SARIF, so SARIF is our common denominator.
-We parse the generic SARIF structure and apply small per-tool hints (severity
-source, default category) keyed off the report filename.
+Most tools emit SARIF (our common denominator); Grype is read from its native
+JSON instead, because that carries package info and relatedVulnerabilities
+(GHSA<->CVE aliases) needed for cross-tool SCA de-duplication.
 """
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, asdict
+import re
+from dataclasses import dataclass, asdict, field
 from pathlib import Path
 
-# Maps a native report filename (stem prefix) -> (tool label, category).
-# A tool may emit several files (e.g. trivy-fs / trivy-config).
-SOURCE_MAP = {
-    "semgrep": ("semgrep", "sast"),
-    "trivy-fs": ("trivy", "sca"),
-    "trivy-config": ("trivy", "iac"),
-    "gitleaks": ("gitleaks", "secrets"),
-    "checkov": ("checkov", "iac"),
+# Each source: (filename, tool label, category, parser format).
+SOURCES = [
+    ("semgrep.sarif", "semgrep", "sast", "sarif"),
+    ("trivy-fs.sarif", "trivy", "sca", "sarif"),
+    ("trivy-config.sarif", "trivy", "iac", "sarif"),
+    ("gitleaks.sarif", "gitleaks", "secrets", "sarif"),
+    ("checkov.sarif", "checkov", "iac", "sarif"),
+    ("grype.json", "grype", "sca", "grype-json"),
+    ("trufflehog.sarif", "trufflehog", "secrets", "sarif"),  # generated from json
+]
+
+# Which report file(s) each configured scanner is expected to produce.
+# syft produces only an SBOM artifact (no findings), so it has none.
+SCANNER_FILES = {
+    "semgrep": ["semgrep.sarif"],
+    "trivy": ["trivy-fs.sarif", "trivy-config.sarif"],
+    "gitleaks": ["gitleaks.sarif"],
+    "checkov": ["checkov.sarif"],
+    "grype": ["grype.json"],
+    "trufflehog": ["trufflehog.sarif"],
+    "syft": [],
 }
 
-# Which report stems each configured scanner is expected to produce.
-SCANNER_STEMS = {
-    "semgrep": ["semgrep"],
-    "trivy": ["trivy-fs", "trivy-config"],
-    "gitleaks": ["gitleaks"],
-    "checkov": ["checkov"],
-}
 
-
-def expected_stems(enabled_scanners) -> set[str]:
-    """Report stems we should expect, given the set of enabled scanners."""
-    stems: set[str] = set()
+def expected_reports(enabled_scanners) -> set[str]:
+    """Report filenames we should expect, given the enabled scanners."""
+    files: set[str] = set()
     for name in enabled_scanners:
-        stems.update(SCANNER_STEMS.get(name, []))
-    return stems
+        files.update(SCANNER_FILES.get(name, []))
+    return files
 
 # SARIF level -> our severity when no numeric CVSS is available.
 _LEVEL_TO_SEVERITY = {
@@ -61,6 +67,20 @@ class Finding:
     message: str
     file: str
     line: int | None
+    package: str | None = None        # SCA: "name@version" for dedup/grouping
+    aliases: list[str] = field(default_factory=list)  # equivalent IDs (e.g. CVEs)
+    tools: list[str] = field(default_factory=list)     # set on merge (provenance)
+
+    def __post_init__(self):
+        if not self.tools:
+            self.tools = [self.tool]
+
+
+# Grype severity strings -> our scale.
+_GRYPE_SEVERITY = {
+    "critical": "critical", "high": "high", "medium": "medium",
+    "low": "low", "negligible": "info", "unknown": "info",
+}
 
 
 def _severity_from_cvss(score: float) -> str:
@@ -90,6 +110,18 @@ def _security_severity(props: dict) -> str | None:
         return _severity_from_cvss(float(raw))
     except (TypeError, ValueError):
         return None
+
+
+_TRIVY_PKG = re.compile(r"Package:\s*(.+)")
+_TRIVY_VER = re.compile(r"Installed Version:\s*(.+)")
+
+
+def _trivy_package(message: str) -> str | None:
+    name = _TRIVY_PKG.search(message)
+    ver = _TRIVY_VER.search(message)
+    if name and ver:
+        return f"{name.group(1).strip()}@{ver.group(1).strip()}"
+    return name.group(1).strip() if name else None
 
 
 def _parse_sarif(path: Path, tool: str, category: str) -> list[Finding]:
@@ -129,16 +161,47 @@ def _parse_sarif(path: Path, tool: str, category: str) -> list[Finding]:
                 file_path = (phys.get("artifactLocation") or {}).get("uri", "")
                 line = (phys.get("region") or {}).get("startLine")
 
+            package = _trivy_package(msg) if (tool == "trivy" and category == "sca") else None
+
             findings.append(Finding(
-                tool=tool,
-                category=category,
-                rule_id=str(rule_id),
-                severity=sev,
-                message=msg or str(rule_id),
-                file=file_path,
-                line=line,
+                tool=tool, category=category, rule_id=str(rule_id), severity=sev,
+                message=msg or str(rule_id), file=file_path, line=line,
+                package=package,
             ))
     return findings
+
+
+def _parse_grype_json(path: Path, tool: str, category: str) -> list[Finding]:
+    """Parse Grype native JSON, capturing package + alias (CVE) info."""
+    try:
+        data = json.loads(path.read_text())
+    except (json.JSONDecodeError, OSError) as exc:
+        raise ValueError(f"{path.name}: unreadable Grype JSON ({exc})") from exc
+
+    findings: list[Finding] = []
+    for match in data.get("matches", []) or []:
+        vuln = match.get("vulnerability") or {}
+        vid = vuln.get("id", "unknown")
+        sev = _GRYPE_SEVERITY.get(str(vuln.get("severity", "")).lower(), "info")
+
+        aliases = [r.get("id") for r in match.get("relatedVulnerabilities", [])
+                   if r.get("id")]
+
+        art = match.get("artifact") or {}
+        name, version = art.get("name", ""), art.get("version", "")
+        package = f"{name}@{version}" if name else None
+        locs = art.get("locations") or []
+        file_path = (locs[0].get("path", "") if locs else "").lstrip("/")
+
+        findings.append(Finding(
+            tool=tool, category=category, rule_id=str(vid), severity=sev,
+            message=f"{vid} in {package or name}", file=file_path, line=None,
+            package=package, aliases=aliases,
+        ))
+    return findings
+
+
+_PARSERS = {"sarif": _parse_sarif, "grype-json": _parse_grype_json}
 
 
 @dataclass
@@ -155,18 +218,18 @@ def load_findings(native_dir: str = "/reports/native",
     findings: list[Finding] = []
     found, missing, errored = [], [], []
 
-    for stem, (tool, category) in SOURCE_MAP.items():
-        if expected is not None and stem not in expected:
+    for filename, tool, category, fmt in SOURCES:
+        if expected is not None and filename not in expected:
             continue  # scanner disabled in config — don't expect its report
-        path = base / f"{stem}.sarif"
+        path = base / filename
         if path.exists() and path.stat().st_size > 0:
             try:
-                findings.extend(_parse_sarif(path, tool, category))
-                found.append(path.name)
+                findings.extend(_PARSERS[fmt](path, tool, category))
+                found.append(filename)
             except ValueError as exc:
                 errored.append(str(exc))
         else:
-            missing.append(path.name)
+            missing.append(filename)
 
     return ScanResult(findings=findings, reports_found=found,
                       reports_missing=missing, reports_errored=errored)

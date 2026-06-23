@@ -42,8 +42,12 @@ def main() -> int:
         "TRIVY_VERSION": version("trivy", "0.58.0"),
         "GITLEAKS_VERSION": version("gitleaks", "v8.21.2"),
         "CHECKOV_VERSION": version("checkov", "3.2.334"),
+        "GRYPE_VERSION": version("grype", "v0.85.0"),
+        "TRUFFLEHOG_VERSION": version("trufflehog", "3.88.0"),
+        "SYFT_VERSION": version("syft", "v1.18.0"),
         "SEMGREP_RULES": SEMGREP_OFFLINE_RULES if offline else SEMGREP_ONLINE_RULES,
         "TRIVY_DB_FLAGS": TRIVY_OFFLINE_FLAGS if offline else "",
+        "GRYPE_DB_AUTO_UPDATE": "false" if offline else "true",
         "ASS_SBOM": "1" if cfg.get("sbom", True) else "0",
         "FAIL_ON": str(cfg.get("fail_on", "high")),
     }

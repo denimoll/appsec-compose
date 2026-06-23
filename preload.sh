@@ -30,6 +30,13 @@ echo "==> Downloading Trivy vulnerability DB (v${TRIVY_VERSION})"
 docker run --rm -v "$SCRIPT_DIR/cache/trivy:/root/.cache/trivy" \
   "aquasec/trivy:${TRIVY_VERSION}" image --download-db-only
 
+echo "==> Downloading Grype vulnerability DB (${GRYPE_VERSION})"
+mkdir -p cache/grype
+docker run --rm -e GRYPE_DB_CACHE_DIR=/cache/grype \
+  -v "$SCRIPT_DIR/cache/grype:/cache/grype" \
+  "anchore/grype:${GRYPE_VERSION}" db update
+
 echo
 echo "Preload complete. Set 'offline: true' in scan-config.yml to use it."
+echo "(gitleaks, checkov, semgrep[file], trufflehog, syft need no extra DB.)"
 echo "Cache size: $(du -sh cache 2>/dev/null | cut -f1)"

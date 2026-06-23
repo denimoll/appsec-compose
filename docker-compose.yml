@@ -45,7 +45,7 @@ services:
       - |
         trivy fs --quiet ${TRIVY_DB_FLAGS:-} --scanners vuln,secret --format sarif --output /reports/native/trivy-fs.sarif /code
         trivy config --quiet --format sarif --output /reports/native/trivy-config.sarif /code
-        [ "${ASS_SBOM:-1}" = "1" ] && trivy fs --quiet ${TRIVY_DB_FLAGS:-} --format cyclonedx --output /reports/sbom.cdx.json /code || true
+        [ "${ASS_SBOM:-1}" = "1" ] && trivy fs --quiet ${TRIVY_DB_FLAGS:-} --format cyclonedx --output /reports/sbom.trivy.cdx.json /code || true
     environment:
       TRIVY_DB_FLAGS: ${TRIVY_DB_FLAGS:-}
       ASS_SBOM: ${ASS_SBOM:-1}
@@ -81,6 +81,50 @@ services:
         --output-file-path /reports/native/_checkov >/dev/null 2>&1 || true ;
         mv /reports/native/_checkov/results_sarif.sarif /reports/native/checkov.sarif 2>/dev/null || true ;
         rm -rf /reports/native/_checkov
+    volumes:
+      - *code-mount
+      - ./reports:/reports
+
+  # ---- SCA (alternative) -----------------------------------------------
+  grype:
+    image: anchore/grype:${GRYPE_VERSION:-v0.85.0}
+    # entrypoint is `grype`; default exit code is 0. SARIF is the native ASPM
+    # artifact; the JSON carries relatedVulnerabilities (GHSA<->CVE aliases) and
+    # package info that the collector uses for cross-tool SCA de-duplication.
+    command:
+      - "dir:/code"
+      - "-o"
+      - "sarif=/reports/native/grype.sarif"
+      - "-o"
+      - "json=/reports/native/grype.json"
+      - "-q"
+    environment:
+      GRYPE_DB_CACHE_DIR: /cache/grype
+      GRYPE_DB_AUTO_UPDATE: ${GRYPE_DB_AUTO_UPDATE:-true}
+    volumes:
+      - *code-mount
+      - ./reports:/reports
+      - ./cache/grype:/cache/grype
+
+  # ---- Secrets (alternative) -------------------------------------------
+  trufflehog:
+    image: trufflesecurity/trufflehog:${TRUFFLEHOG_VERSION:-3.88.0}
+    entrypoint: ["/bin/sh", "-c"]
+    # TruffleHog has no SARIF output; it emits JSON lines. We keep the raw JSON
+    # as the native report and the collector generates trufflehog.sarif from it.
+    command:
+      - >-
+        trufflehog filesystem /code --json --no-update
+        > /reports/native/trufflehog.json 2>/dev/null || true
+    volumes:
+      - *code-mount
+      - ./reports:/reports
+
+  # ---- SBOM (alternative generator) ------------------------------------
+  syft:
+    image: anchore/syft:${SYFT_VERSION:-v1.18.0}
+    # entrypoint is `syft`; writes a CycloneDX SBOM artifact (no findings).
+    command: ["scan", "dir:/code", "-o", "cyclonedx-json=/reports/sbom.syft.cdx.json", "-q"]
     volumes:
       - *code-mount
       - ./reports:/reports

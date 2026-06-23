@@ -5,31 +5,49 @@
 
 # ---- Scanners --------------------------------------------------------
 # Toggle each check on/off and pin its image version (bump to upgrade).
-# The category each tool covers is in the comment.
+# Several tools cover the same category — enable one, or several at once;
+# every enabled tool produces its own native report and all are aggregated.
 scanners:
-  semgrep:                 # SAST  (source code vulnerabilities)
+  # -- SAST -----------------------------------------------------------
+  semgrep:                 # source code vulnerabilities
     enabled: true
     version: "1.97.0"
 
-  trivy:                   # SCA + IaC + SBOM (dependencies, Dockerfile/TF, components)
+  # -- SCA  (dependency vulnerabilities) — Trivy and/or Grype ----------
+  trivy:                   # also covers IaC (config) + SBOM (see below)
     enabled: true
     version: "0.58.0"
+  grype:                   # alternative SCA engine (Anchore)
+    enabled: true
+    version: "v0.85.0"
 
-  gitleaks:                # Secret scanning (tokens/keys in code)
+  # -- Secrets — Gitleaks and/or TruffleHog ---------------------------
+  gitleaks:                # fast pattern-based secret scanning
     enabled: true
     version: "v8.21.2"
+  trufflehog:              # detector-based, can verify secrets
+    enabled: true
+    version: "3.88.0"
 
-  checkov:                 # IaC (deeper policy coverage than Trivy)
+  # -- IaC ------------------------------------------------------------
+  checkov:                 # IaC policy (deeper than Trivy config)
     enabled: true
     version: "3.2.334"
 
+  # -- SBOM generator — Syft (Trivy also emits one via `sbom:` below) --
+  syft:                    # CycloneDX SBOM (Anchore) -> reports/sbom.syft.cdx.json
+    enabled: true
+    version: "v1.18.0"
+
 # ---- Extra artifacts -------------------------------------------------
-sbom: true                 # CycloneDX SBOM via Trivy -> reports/sbom.cdx.json
+sbom: true                 # CycloneDX SBOM via Trivy -> reports/sbom.trivy.cdx.json
                            # (only produced when `trivy` is enabled)
 
 # ---- Policy (drives the CI exit code) --------------------------------
 fail_on: high              # critical | high | medium | low | none  (none = report-only)
 unknown_severity: medium   # how to rank findings that carry no severity
+dedup: true                # merge duplicate findings across tools
+                           # (e.g. Trivy CVE == Grype GHSA via aliases)
 
 # ---- Offline / air-gapped --------------------------------------------
 offline: true             # true => use DBs/rules preloaded by ./preload.sh,

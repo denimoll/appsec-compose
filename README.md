@@ -12,14 +12,25 @@ aggregates the reports and produces a CI-meaningful exit code.
 
 ## Engines
 
-| Category | Tool | Output |
-|---|---|---|
-| SAST | [Semgrep](https://semgrep.dev) | `semgrep.sarif` |
-| SCA + secrets (fs) | [Trivy](https://trivy.dev) | `trivy-fs.sarif` |
-| IaC | [Trivy config](https://trivy.dev) | `trivy-config.sarif` |
-| SBOM | [Trivy](https://trivy.dev) | `sbom.cdx.json` (CycloneDX) |
-| Secrets | [Gitleaks](https://github.com/gitleaks/gitleaks) | `gitleaks.sarif` |
-| IaC | [Checkov](https://www.checkov.io) | `checkov.sarif` |
+| Category | Tool | Default | Output |
+|---|---|---|---|
+| SAST | [Semgrep](https://semgrep.dev) | on | `semgrep.sarif` |
+| SCA | [Trivy](https://trivy.dev) | on | `trivy-fs.sarif` |
+| SCA (alt) | [Grype](https://github.com/anchore/grype) | off | `grype.sarif` |
+| IaC | [Trivy config](https://trivy.dev) | on | `trivy-config.sarif` |
+| IaC | [Checkov](https://www.checkov.io) | on | `checkov.sarif` |
+| Secrets | [Gitleaks](https://github.com/gitleaks/gitleaks) | on | `gitleaks.sarif` |
+| Secrets (alt) | [TruffleHog](https://github.com/trufflesecurity/trufflehog) | off | `trufflehog.json` + `trufflehog.sarif`\* |
+| SBOM | [Trivy](https://trivy.dev) | on | `sbom.trivy.cdx.json` |
+| SBOM (alt) | [Syft](https://github.com/anchore/syft) | off | `sbom.syft.cdx.json` |
+
+Tools covering the same category are **complementary** — enable one or several;
+every enabled tool emits its own native report and all are aggregated.
+
+\* TruffleHog has no native SARIF, so the collector keeps its raw JSON **and**
+generates a SARIF from it, so SARIF-only ASPM tools can ingest it too. Our
+`findings.json` normalization is internal (for the summary); the per-tool native
+reports are what you upload to an ASPM.
 
 ## Usage
 
@@ -77,9 +88,12 @@ reports/
 │   ├── trivy-fs.sarif
 │   ├── trivy-config.sarif
 │   ├── gitleaks.sarif
-│   └── checkov.sarif
-├── findings.json           # consolidated normalized findings + counts
-├── sbom.cdx.json           # CycloneDX SBOM (for DependencyTrack etc.)
+│   ├── checkov.sarif
+│   ├── grype.sarif         # + grype.json (carries CVE/GHSA aliases for dedup)
+│   └── trufflehog.json     # + generated trufflehog.sarif
+├── findings.json           # consolidated, de-duplicated findings + counts
+├── sbom.trivy.cdx.json     # CycloneDX SBOM (Trivy)
+├── sbom.syft.cdx.json      # CycloneDX SBOM (Syft, if enabled)
 ├── summary.md              # human summary
 └── summary.html            # human summary (styled)
 ```
@@ -90,6 +104,23 @@ The **collector** decides pass/fail: exit `1` if any finding is at or above
 `fail_on`, else `0`. Scanners themselves always exit `0`, so a noisy finding
 never breaks the scan phase — only the policy does. `run.sh` propagates the
 collector's exit code, which makes this safe to drop into a CI gate.
+
+## De-duplication
+
+When several tools cover the same category they report the same issues. With
+`dedup: true` (default) the collector merges duplicates in `findings.json` and
+the summary (the raw native reports are left untouched for ASPM import):
+
+- **secrets** — same `(file, line)` is one secret, regardless of tool.
+- **SCA** — same `package@version` + file, clustered by overlapping vuln IDs.
+  Trivy's `CVE-2018-1000656` and Grype's `GHSA-562c-5r94-xh97` merge because
+  Grype's `relatedVulnerabilities` lists that CVE — so CVE/GHSA aliases collapse.
+- **SAST/IaC** — same rule at the same `(file, line)`.
+
+A merged finding keeps the highest severity, records **every tool** that
+reported it, and lists the equivalent IDs as aliases. `findings.json` reports
+`raw_findings`, `unique_findings` and `duplicates_removed`. Per-tool counts
+still reflect each tool's true raw yield.
 
 ## How it works
 

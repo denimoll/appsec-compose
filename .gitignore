@@ -3,7 +3,7 @@ reports/native/
 reports/summary.md
 reports/summary.html
 reports/findings.json
-reports/sbom.cdx.json
+reports/sbom.*.cdx.json
 
 # Keep the reports/ dir tracked but empty.
 !reports/.gitkeep
@@ -17,3 +17,7 @@ cache/
 __pycache__/
 *.pyc
 *.bak
+
+# OS / tooling cruft
+.DS_Store
+.claude/

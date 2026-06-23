@@ -26,15 +26,20 @@ def _bump_unknown(findings: list[Finding], unknown_severity: str) -> None:
             f.severity = unknown_severity
 
 
-def evaluate(findings: list[Finding], cfg: Config) -> PolicyResult:
+def evaluate(findings: list[Finding], cfg: Config,
+             raw_findings: list[Finding] | None = None) -> PolicyResult:
+    """Counts/gate from `findings` (deduped); per-tool counts from the raw set
+    so they reflect each tool's true yield, not the merged total."""
     _bump_unknown(findings, cfg.unknown_severity)
 
     severity_counts = {s: 0 for s in SEVERITY_ORDER}
     category_counts: dict[str, int] = {}
-    tool_counts: dict[str, int] = {}
     for f in findings:
         severity_counts[f.severity] += 1
         category_counts[f.category] = category_counts.get(f.category, 0) + 1
+
+    tool_counts: dict[str, int] = {}
+    for f in (raw_findings if raw_findings is not None else findings):
         tool_counts[f.tool] = tool_counts.get(f.tool, 0) + 1
 
     if cfg.fail_on == "none":
