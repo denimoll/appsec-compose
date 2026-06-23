@@ -1,0 +1,58 @@
+name: appsec-compose scan
+
+# Runs the full appsec-compose scan on push/PR, uploads every SARIF to GitHub
+# code scanning, keeps all reports as a build artifact, and fails the job on a
+# policy breach (fail_on in scan-config.yml).
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  security-events: write   # required to upload SARIF to code scanning
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Cache scanner vulnerability DBs / rulesets between runs (./cache is
+      # populated by preload.sh; here it just persists Trivy/Grype DB downloads).
+      - name: Cache scanner DBs
+        uses: actions/cache@v4
+        with:
+          path: cache
+          key: appsec-db-${{ runner.os }}-${{ hashFiles('scan-config.yml') }}
+          restore-keys: appsec-db-${{ runner.os }}-
+
+      # Scan the checked-out repo. continue-on-error so we still upload reports
+      # even when the policy gate fails; the gate is re-applied at the end.
+      - name: Run appsec-compose
+        id: scan
+        continue-on-error: true
+        run: ./run.sh "$GITHUB_WORKSPACE"
+
+      - name: Upload SARIF to code scanning
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: reports/native   # uploads every *.sarif in the directory
+
+      - name: Upload reports artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: appsec-reports
+          path: reports/
+
+      - name: Enforce policy gate
+        if: always()
+        run: |
+          python3 - <<'PY'
+          import json, sys
+          d = json.load(open("reports/findings.json"))
+          sys.exit(d["policy"]["exit_code"])
+          PY

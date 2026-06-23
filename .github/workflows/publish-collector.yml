@@ -1,0 +1,40 @@
+name: publish collector image
+
+# Builds the Python collector and pushes it to GHCR on release (and on demand),
+# so CI/users can skip the local build by pointing the compose `collector`
+# service at ghcr.io/<owner>/<repo>-collector instead of `build: ./orchestrator`.
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build-push:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Compute image tags
+        id: meta
+        run: |
+          repo="${GITHUB_REPOSITORY,,}"          # lowercase for GHCR
+          echo "image=ghcr.io/${repo}-collector" >> "$GITHUB_OUTPUT"
+          echo "ref=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: ./orchestrator
+          push: true
+          tags: |
+            ${{ steps.meta.outputs.image }}:latest
+            ${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.ref }}

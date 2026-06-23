@@ -105,6 +105,19 @@ The **collector** decides pass/fail: exit `1` if any finding is at or above
 never breaks the scan phase — only the policy does. `run.sh` propagates the
 collector's exit code, which makes this safe to drop into a CI gate.
 
+## CI/CD
+
+Ready-to-use templates are included:
+
+- **GitHub Actions** — [`.github/workflows/appsec-scan.yml`](.github/workflows/appsec-scan.yml)
+  runs the scan, uploads every SARIF to **code scanning**, keeps `reports/` as an
+  artifact, caches the vuln DBs, and fails the job on a policy breach.
+- **GitLab CI** — [`.gitlab-ci.yml`](.gitlab-ci.yml) runs the scan, exposes the
+  CycloneDX SBOM to GitLab Dependency Scanning, and caches DBs. (Needs a runner
+  with the host Docker socket — see the file header.)
+- **Publish the collector image** — [`.github/workflows/publish-collector.yml`](.github/workflows/publish-collector.yml)
+  pushes the collector to GHCR on release, so CI can skip the local build.
+
 ## De-duplication
 
 When several tools cover the same category they report the same issues. With
