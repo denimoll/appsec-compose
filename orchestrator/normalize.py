@@ -20,6 +20,8 @@ SOURCES = [
     ("checkov.sarif", "checkov", "iac", "sarif"),
     ("grype.json", "grype", "sca", "grype-json"),
     ("trufflehog.sarif", "trufflehog", "secrets", "sarif"),  # generated from json
+    ("hadolint.sarif", "hadolint", "iac", "sarif"),
+    ("osv.sarif", "osv", "sca", "sarif"),
 ]
 
 # Which report file(s) each configured scanner is expected to produce.
@@ -32,6 +34,8 @@ SCANNER_FILES = {
     "grype": ["grype.json"],
     "trufflehog": ["trufflehog.sarif"],
     "syft": [],
+    "hadolint": ["hadolint.sarif"],
+    "osv": ["osv.sarif"],
 }
 
 
@@ -116,6 +120,8 @@ def _security_severity(props: dict) -> str | None:
 
 _TRIVY_PKG = re.compile(r"Package:\s*(.+)")
 _TRIVY_VER = re.compile(r"Installed Version:\s*(.+)")
+# OSV message: "Package 'urllib3@1.23.0' is vulnerable to ..."
+_OSV_PKG = re.compile(r"Package '([^']+)'")
 
 
 def _trivy_package(message: str) -> str | None:
@@ -124,6 +130,14 @@ def _trivy_package(message: str) -> str | None:
     if name and ver:
         return f"{name.group(1).strip()}@{ver.group(1).strip()}"
     return name.group(1).strip() if name else None
+
+
+def _osv_package(message: str) -> str | None:
+    m = _OSV_PKG.search(message)
+    return m.group(1).strip() if m else None
+
+
+_SCA_PACKAGE = {"trivy": _trivy_package, "osv": _osv_package}
 
 
 def _parse_sarif(path: Path, tool: str, category: str) -> list[Finding]:
@@ -173,7 +187,9 @@ def _parse_sarif(path: Path, tool: str, category: str) -> list[Finding]:
                 file_path = (phys.get("artifactLocation") or {}).get("uri", "")
                 line = (phys.get("region") or {}).get("startLine")
 
-            package = _trivy_package(msg) if (tool == "trivy" and category == "sca") else None
+            package = None
+            if category == "sca" and tool in _SCA_PACKAGE:
+                package = _SCA_PACKAGE[tool](msg)
 
             findings.append(Finding(
                 tool=tool, category=category, rule_id=str(rule_id), severity=sev,

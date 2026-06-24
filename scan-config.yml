@@ -15,13 +15,16 @@ scanners:
     enabled: true
     version: "1.97.0"
 
-  # -- SCA  (dependency vulnerabilities) — Trivy and/or Grype ----------
+  # -- SCA  (dependency vulnerabilities) — Trivy / Grype / OSV ---------
   trivy:                   # also covers IaC (config) + SBOM (see below)
     enabled: true
     version: "0.58.0"
   grype:                   # alternative SCA engine (Anchore)
     enabled: false
     version: "v0.85.0"
+  osv:                     # alternative SCA engine (Google OSV) — needs network
+    enabled: false
+    version: "v2.4.0"
 
   # -- Secrets — Gitleaks and/or TruffleHog ---------------------------
   gitleaks:                # fast pattern-based secret scanning
@@ -31,19 +34,23 @@ scanners:
     enabled: false
     version: "3.88.0"
 
-  # -- IaC ------------------------------------------------------------
+  # -- IaC — Checkov and/or Hadolint ----------------------------------
   checkov:                 # IaC policy (deeper than Trivy config)
     enabled: true
     version: "3.2.334"
+  hadolint:                # Dockerfile linter / best-practices
+    enabled: false
+    version: "2.12.0-alpine"
 
   # -- SBOM generator — Syft (Trivy also emits one via `sbom:` below) --
   syft:                    # CycloneDX SBOM (Anchore) -> reports/sbom.syft.cdx.json
     enabled: false
-    version: "sha256:a2066c7d582669db5c9191ed8b8055766a63a3c231b4134a5c75e65a70f30b23"
+    version: "v1.18.0"
 
 # ---- Extra artifacts -------------------------------------------------
 sbom: true                 # CycloneDX SBOM via Trivy -> reports/sbom.trivy.cdx.json
                            # (only produced when `trivy` is enabled)
+secrets_history: false     # true => Gitleaks also scans git history (needs .git)
 
 # ---- Policy (drives the CI exit code) --------------------------------
 fail_on: high              # critical | high | medium | low | none  (none = report-only)

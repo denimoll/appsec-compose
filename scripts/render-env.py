@@ -36,6 +36,8 @@ TOOLS = {
     "grype": ("anchore/grype", "v0.85.0", "GRYPE"),
     "trufflehog": ("trufflesecurity/trufflehog", "3.88.0", "TRUFFLEHOG"),
     "syft": ("anchore/syft", "v1.18.0", "SYFT"),
+    "hadolint": ("hadolint/hadolint", "2.12.0-alpine", "HADOLINT"),
+    "osv": ("ghcr.io/google/osv-scanner", "v2.4.0", "OSV"),
 }
 
 # Registry pack fetched offline by preload.sh; used as a local file when offline.
@@ -97,8 +99,12 @@ def main() -> int:
         "SEMGREP_RULES": SEMGREP_OFFLINE_RULES if offline else SEMGREP_ONLINE_RULES,
         "TRIVY_DB_FLAGS": TRIVY_OFFLINE_FLAGS if offline else "",
         "GRYPE_DB_AUTO_UPDATE": "false" if offline else "true",
+        # Empty => gitleaks scans git history; default skips it (working tree only).
+        "GITLEAKS_GIT_FLAG": "" if cfg.get("secrets_history", False) else "--no-git",
         "ASS_SBOM": "1" if cfg.get("sbom", True) else "0",
         "FAIL_ON": str(cfg.get("fail_on", "high")),
+        # All tag refs (for ./pin.sh to resolve to digests).
+        "ASS_TAGREFS": " ".join(env[f"{p}_TAGREF"] for _, _, p in TOOLS.values()),
     })
 
     (ROOT / ".env").write_text(

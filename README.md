@@ -17,8 +17,10 @@ aggregates the reports and produces a CI-meaningful exit code.
 | SAST | [Semgrep](https://semgrep.dev) | on | `semgrep.sarif` |
 | SCA | [Trivy](https://trivy.dev) | on | `trivy-fs.sarif` |
 | SCA (alt) | [Grype](https://github.com/anchore/grype) | off | `grype.sarif` |
+| SCA (alt) | [OSV-Scanner](https://github.com/google/osv-scanner) | off | `osv.sarif` (needs network) |
 | IaC | [Trivy config](https://trivy.dev) | on | `trivy-config.sarif` |
 | IaC | [Checkov](https://www.checkov.io) | on | `checkov.sarif` |
+| IaC (alt) | [Hadolint](https://github.com/hadolint/hadolint) | off | `hadolint.sarif` (Dockerfiles) |
 | Secrets | [Gitleaks](https://github.com/gitleaks/gitleaks) | on | `gitleaks.sarif` |
 | Secrets (alt) | [TruffleHog](https://github.com/trufflesecurity/trufflehog) | off | `trufflehog.json` + `trufflehog.sarif`\* |
 | SBOM | [Trivy](https://trivy.dev) | on | `sbom.trivy.cdx.json` |
@@ -62,6 +64,8 @@ offline: false             # use ./preload.sh cache, no network during scan
 
 Disable a check by setting `enabled: false` — that scanner won't run and the
 collector won't expect its report. Upgrade a tool by changing its `version`.
+Set `secrets_history: true` to have Gitleaks scan the full **git history**
+(needs a `.git` in the repo), not just the working tree.
 
 ## Offline / air-gapped
 
