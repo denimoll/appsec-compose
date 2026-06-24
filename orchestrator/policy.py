@@ -27,9 +27,11 @@ def _bump_unknown(findings: list[Finding], unknown_severity: str) -> None:
 
 
 def evaluate(findings: list[Finding], cfg: Config,
-             raw_findings: list[Finding] | None = None) -> PolicyResult:
-    """Counts/gate from `findings` (deduped); per-tool counts from the raw set
-    so they reflect each tool's true yield, not the merged total."""
+             raw_findings: list[Finding] | None = None,
+             gate_findings: list[Finding] | None = None) -> PolicyResult:
+    """Counts come from `findings` (deduped, kept); per-tool counts from the raw
+    set. The gate (breaching/exit_code) is computed over `gate_findings` when
+    given (e.g. only NEW findings in baseline mode), else over `findings`."""
     _bump_unknown(findings, cfg.unknown_severity)
 
     severity_counts = {s: 0 for s in SEVERITY_ORDER}
@@ -42,11 +44,12 @@ def evaluate(findings: list[Finding], cfg: Config,
     for f in (raw_findings if raw_findings is not None else findings):
         tool_counts[f.tool] = tool_counts.get(f.tool, 0) + 1
 
+    gate = gate_findings if gate_findings is not None else findings
     if cfg.fail_on == "none":
         return PolicyResult(0, "none", 0, severity_counts, category_counts, tool_counts)
 
     threshold_rank = _RANK[cfg.fail_on]
-    breaching = sum(c for s, c in severity_counts.items() if _RANK[s] >= threshold_rank)
+    breaching = sum(1 for f in gate if _RANK[f.severity] >= threshold_rank)
     exit_code = 1 if breaching > 0 else 0
     return PolicyResult(exit_code, cfg.fail_on, breaching,
                         severity_counts, category_counts, tool_counts)

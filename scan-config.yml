@@ -48,6 +48,8 @@ fail_on: high              # critical | high | medium | low | none  (none = repo
 unknown_severity: medium   # how to rank findings that carry no severity
 dedup: true                # merge duplicate findings across tools
                            # (e.g. Trivy CVE == Grype GHSA via aliases)
+baseline: false            # gate only on findings NEW since the accepted
+                           # appsec-baseline.json (./run.sh ... --update-baseline)
 
 # Suppressions: drop matching findings from the gate and counts (kept in
 # findings.json under "suppressed" with the reason). An entry matches when every

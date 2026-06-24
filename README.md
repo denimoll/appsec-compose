@@ -156,6 +156,22 @@ ignore:
 Suppressed findings are excluded from `fail_on` but recorded in `findings.json`
 under `suppressed` (with the reason) for the audit trail.
 
+## Baseline (gate on new findings)
+
+Accept the current findings and fail only on **new** ones thereafter:
+
+```bash
+# 1. set `baseline: true` in scan-config.yml, then snapshot the accepted state:
+./run.sh /path/to/repo --update-baseline      # writes appsec-baseline.json
+# 2. commit appsec-baseline.json; subsequent runs gate on new findings only:
+./run.sh /path/to/repo
+```
+
+Each finding gets a stable fingerprint `(category, id, file, package, line)`.
+Runs report `new` / `known` / `fixed` counts (in the console, summary and
+`findings.json`), and `fail_on` applies to **new** findings only. Re-run
+`--update-baseline` to re-accept the current state.
+
 ## How it works
 
 1. `run.sh` renders `scan-config.yml` → `.env` and bind-mounts the target repo

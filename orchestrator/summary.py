@@ -27,6 +27,9 @@ _Deduplicated: {{ total }} unique of {{ stats.raw }} raw findings ({{ stats.remo
 {% if suppressed_count %}
 _Suppressed by ignore rules: {{ suppressed_count }} (excluded from the gate)._
 {% endif %}
+{% if delta %}
+_Baseline: **{{ delta.new | length }} new**, {{ delta.known | length }} known, {{ delta.fixed }} fixed (gate applies to new only)._
+{% endif %}
 ## Totals by severity
 
 | {{ sev_order | join(" | ") }} | Total |
@@ -132,7 +135,7 @@ _HTML_TEMPLATE = """<!doctype html>
 </style></head><body>
 <header><div class="wrap">
   <div class="brand"><span class="dot"></span>appsec-compose</div>
-  <div class="sub">Generated {{ generated }} UTC &middot; policy fail_on = {{ policy.threshold }}{% if stats.removed %} &middot; {{ total }} unique of {{ stats.raw }} ({{ stats.removed }} merged){% endif %}{% if suppressed_count %} &middot; {{ suppressed_count }} suppressed{% endif %}</div>
+  <div class="sub">Generated {{ generated }} UTC &middot; policy fail_on = {{ policy.threshold }}{% if stats.removed %} &middot; {{ total }} unique of {{ stats.raw }} ({{ stats.removed }} merged){% endif %}{% if suppressed_count %} &middot; {{ suppressed_count }} suppressed{% endif %}{% if delta %} &middot; {{ delta.new | length }} new / {{ delta.known | length }} known / {{ delta.fixed }} fixed{% endif %}</div>
   <div class="pill {{ 'fail' if policy.exit_code else 'pass' }}">
     <span class="big">{{ '✗' if policy.exit_code else '✓' }} {{ verdict }}</span>
     &middot; {{ policy.breaching }} at/above threshold
@@ -212,7 +215,7 @@ def _sort_findings(findings: list[Finding]) -> list[Finding]:
 
 
 def _context(result: ScanResult, policy: PolicyResult, findings: list[Finding],
-             stats: DedupStats, suppressed_count: int) -> dict:
+             stats: DedupStats, suppressed_count: int, delta) -> dict:
     total = sum(policy.severity_counts.values())
     top = _sort_findings(findings)[:_TOP_N]
     return {
@@ -220,6 +223,7 @@ def _context(result: ScanResult, policy: PolicyResult, findings: list[Finding],
         "policy": policy,
         "stats": stats,
         "suppressed_count": suppressed_count,
+        "delta": delta,
         "verdict": "FAIL" if policy.exit_code else "PASS",
         "sev_order": _DISPLAY_ORDER,
         "total": total,
@@ -235,9 +239,9 @@ def _context(result: ScanResult, policy: PolicyResult, findings: list[Finding],
 
 def render(result: ScanResult, policy: PolicyResult, findings: list[Finding],
            stats: DedupStats, out_dir: str = "/reports",
-           suppressed_count: int = 0) -> None:
+           suppressed_count: int = 0, delta=None) -> None:
     env = Environment(autoescape=False, trim_blocks=True, lstrip_blocks=True)
-    ctx = _context(result, policy, findings, stats, suppressed_count)
+    ctx = _context(result, policy, findings, stats, suppressed_count, delta)
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
     (out / "summary.md").write_text(env.from_string(_MD_TEMPLATE).render(**ctx))

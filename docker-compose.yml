@@ -141,6 +141,8 @@ services:
       checkov:  { condition: service_completed_successfully }
     environment:
       FAIL_ON: ${FAIL_ON:-}
+      ASS_UPDATE_BASELINE: ${ASS_UPDATE_BASELINE:-}
     volumes:
       - ./reports:/reports
       - ./scan-config.yml:/app/scan-config.yml:ro
+      - ./appsec-baseline.json:/app/appsec-baseline.json
