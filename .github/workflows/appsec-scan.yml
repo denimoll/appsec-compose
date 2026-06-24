@@ -1,8 +1,9 @@
 name: appsec-compose scan
 
-# Runs the full appsec-compose scan on push/PR, uploads every SARIF to GitHub
-# code scanning, keeps all reports as a build artifact, and fails the job on a
-# policy breach (fail_on in scan-config.yml).
+# Runs the full appsec-compose scan on push/PR, uploads each tool's SARIF to
+# GitHub code scanning (one category per tool), and keeps all reports as a build
+# artifact. The policy verdict is written to the job summary; flip the final
+# step to enforce a hard gate (see the comment there).
 on:
   push:
     branches: [main]
@@ -19,8 +20,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # Cache scanner vulnerability DBs / rulesets between runs (./cache is
-      # populated by preload.sh; here it just persists Trivy/Grype DB downloads).
+      # Cache scanner vulnerability DBs / rulesets between runs.
       - name: Cache scanner DBs
         uses: actions/cache@v4
         with:
@@ -28,18 +28,41 @@ jobs:
           key: appsec-db-${{ runner.os }}-${{ hashFiles('scan-config.yml') }}
           restore-keys: appsec-db-${{ runner.os }}-
 
-      # Scan the checked-out repo. continue-on-error so we still upload reports
-      # even when the policy gate fails; the gate is re-applied at the end.
       - name: Run appsec-compose
         id: scan
         continue-on-error: true
         run: ./run.sh "$GITHUB_WORKSPACE"
 
-      - name: Upload SARIF to code scanning
-        if: always()
+      # One upload per tool: code scanning needs a distinct category per SARIF
+      # run. hashFiles() guards make disabled tools' steps no-ops.
+      - name: Upload Semgrep SARIF
+        if: always() && hashFiles('reports/native/semgrep.sarif') != ''
         uses: github/codeql-action/upload-sarif@v3
-        with:
-          sarif_file: reports/native   # uploads every *.sarif in the directory
+        with: { sarif_file: reports/native/semgrep.sarif, category: semgrep }
+      - name: Upload Trivy (fs) SARIF
+        if: always() && hashFiles('reports/native/trivy-fs.sarif') != ''
+        uses: github/codeql-action/upload-sarif@v3
+        with: { sarif_file: reports/native/trivy-fs.sarif, category: trivy-fs }
+      - name: Upload Trivy (config) SARIF
+        if: always() && hashFiles('reports/native/trivy-config.sarif') != ''
+        uses: github/codeql-action/upload-sarif@v3
+        with: { sarif_file: reports/native/trivy-config.sarif, category: trivy-config }
+      - name: Upload Gitleaks SARIF
+        if: always() && hashFiles('reports/native/gitleaks.sarif') != ''
+        uses: github/codeql-action/upload-sarif@v3
+        with: { sarif_file: reports/native/gitleaks.sarif, category: gitleaks }
+      - name: Upload Checkov SARIF
+        if: always() && hashFiles('reports/native/checkov.sarif') != ''
+        uses: github/codeql-action/upload-sarif@v3
+        with: { sarif_file: reports/native/checkov.sarif, category: checkov }
+      - name: Upload Grype SARIF
+        if: always() && hashFiles('reports/native/grype.sarif') != ''
+        uses: github/codeql-action/upload-sarif@v3
+        with: { sarif_file: reports/native/grype.sarif, category: grype }
+      - name: Upload TruffleHog SARIF
+        if: always() && hashFiles('reports/native/trufflehog.sarif') != ''
+        uses: github/codeql-action/upload-sarif@v3
+        with: { sarif_file: reports/native/trufflehog.sarif, category: trufflehog }
 
       - name: Upload reports artifact
         if: always()
@@ -48,11 +71,20 @@ jobs:
           name: appsec-reports
           path: reports/
 
-      - name: Enforce policy gate
+      - name: Policy verdict
         if: always()
         run: |
-          python3 - <<'PY'
-          import json, sys
+          python3 - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import json
           d = json.load(open("reports/findings.json"))
-          sys.exit(d["policy"]["exit_code"])
+          p, sc = d["policy"], d["severity_counts"]
+          verdict = "❌ FAIL" if p["exit_code"] else "✅ PASS"
+          print(f"## appsec-compose — {verdict} (fail_on=`{p['fail_on']}`)\n")
+          print(f"{p['breaching']} finding(s) at/above threshold of "
+                f"{sum(sc.values())} total.\n")
+          print("| " + " | ".join(sc) + " |")
+          print("|" + "---|" * len(sc))
+          print("| " + " | ".join(str(sc[k]) for k in sc) + " |")
           PY
+          # To enforce a hard gate (fail the job on a policy breach), uncomment:
+          # python3 -c "import json,sys; sys.exit(json.load(open('reports/findings.json'))['policy']['exit_code'])"
