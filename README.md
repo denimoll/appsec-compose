@@ -172,6 +172,20 @@ Runs report `new` / `known` / `fixed` counts (in the console, summary and
 `findings.json`), and `fail_on` applies to **new** findings only. Re-run
 `--update-baseline` to re-accept the current state.
 
+## Reproducible / pinned images
+
+By default scanners run from their pinned **tags** (versions in
+`scan-config.yml`). For tamper-evident, fully reproducible runs, pin them to
+immutable digests:
+
+```bash
+./pin.sh        # resolves each repo:tag -> repo@sha256:... into image-digests.lock
+```
+
+Commit `image-digests.lock`; `render-env.py` then runs every scanner by digest.
+Re-run `./pin.sh` after bumping a version (a bumped version with no matching
+lock entry safely falls back to its tag). Delete the lock to go back to tags.
+
 ## How it works
 
 1. `run.sh` renders `scan-config.yml` → `.env` and bind-mounts the target repo
