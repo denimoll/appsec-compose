@@ -1,6 +1,7 @@
 """Render human-readable summaries (Markdown + HTML) from the scan."""
 from __future__ import annotations
 
+from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -50,7 +51,7 @@ _Baseline: **{{ delta.new | length }} new**, {{ delta.known | length }} known, {
 - Missing: {{ reports_missing | join(", ") or "none" }}
 - Errored: {{ reports_errored | join("; ") or "none" }}
 
-## Top findings (up to {{ top_n }})
+## Findings ({{ shown_count }}{% if total > shown_count %} of {{ total }}{% endif %})
 
 {% if top_findings %}| Severity | Tools | Category | Rule | Location |
 |---|---|---|---|---|
@@ -194,11 +195,11 @@ _HTML_TEMPLATE = """<!doctype html>
   {% if not reports_found and not reports_missing and not reports_errored %}<span class="chip">none</span>{% endif %}
 </div>
 
-<h2>Top findings <span style="text-transform:none;color:var(--muted);font-weight:400">(up to {{ top_n }})</span></h2>
+<h2>Findings <span style="text-transform:none;color:var(--muted);font-weight:400">({{ shown_count }}{% if total > shown_count %} of {{ total }}{% endif %})</span></h2>
 {% if top_findings %}
 <div class="filters" id="filters">
-  <button class="active" data-f="all">All ({{ top_findings | length }})</button>
-  {% for cat, n in category_counts %}<button data-f="{{ cat }}">{{ cat }} ({{ n }})</button>{% endfor %}
+  <button class="active" data-f="all">All ({{ shown_count }})</button>
+  {% for cat, n in filter_cats %}<button data-f="{{ cat }}">{{ cat }} ({{ n }})</button>{% endfor %}
 </div>
 <table>
   <thead><tr><th>Severity</th><th>Tools</th><th>Category</th><th>Rule</th><th>Location</th><th>Detail</th></tr></thead>
@@ -241,7 +242,7 @@ consolidated machine output in <code>reports/findings.json</code>.</footer>
 </body></html>
 """
 
-_TOP_N = 50
+_TOP_N = 1000
 
 
 def _sort_findings(findings: list[Finding]) -> list[Finding]:
@@ -252,6 +253,10 @@ def _context(result: ScanResult, policy: PolicyResult, findings: list[Finding],
              stats: DedupStats, suppressed_count: int, delta) -> dict:
     total = sum(policy.severity_counts.values())
     top = _sort_findings(findings)[:_TOP_N]
+    # Filter chips are derived from the rows actually shown, so a filter can
+    # never come up empty (e.g. when a category falls outside the display cap).
+    shown = Counter(f.category for f in top)
+    filter_cats = sorted(shown.items())
     return {
         "generated": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
         "policy": policy,
@@ -267,6 +272,8 @@ def _context(result: ScanResult, policy: PolicyResult, findings: list[Finding],
         "reports_missing": result.reports_missing,
         "reports_errored": result.reports_errored,
         "top_findings": top,
+        "filter_cats": filter_cats,
+        "shown_count": len(top),
         "top_n": _TOP_N,
     }
 
