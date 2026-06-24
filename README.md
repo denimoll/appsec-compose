@@ -98,6 +98,11 @@ reports/
 └── summary.html            # human summary (styled)
 ```
 
+`summary.html` shows severity cards/bars, per-tool breakdown and a findings
+table with **category filters**, expandable **details** (description + advisory
+link per finding), and — in baseline mode — a **NEW** flag on findings added
+since the accepted snapshot. It is fully self-contained (no external assets).
+
 ## Policy / exit codes
 
 The **collector** decides pass/fail: exit `1` if any finding is at or above

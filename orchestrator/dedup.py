@@ -56,10 +56,13 @@ def _merge_group(group: list[Finding]) -> Finding:
     rule_id = next((i for i in ids if i.startswith("CVE-")), rep.rule_id)
     aliases = [i for i in ids if i != rule_id]
 
+    description = next((f.description for f in group if f.description), "")
+    url = next((f.url for f in group if f.url), "")
+
     return Finding(
         tool=rep.tool, category=rep.category, rule_id=rule_id, severity=severity,
         message=rep.message, file=rep.file, line=rep.line, package=rep.package,
-        aliases=aliases, tools=tools,
+        aliases=aliases, tools=tools, description=description, url=url,
     )
 
 

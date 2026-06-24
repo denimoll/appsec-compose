@@ -49,6 +49,8 @@ def main() -> int:
     gate_findings = delta.new if delta is not None else None
     policy = evaluate(kept, cfg, raw_findings=result.findings, gate_findings=gate_findings)
     new_fps = {bl.fingerprint(f) for f in delta.new} if delta else set()
+    for f in kept:                       # transient flag for the HTML report
+        f.is_new = bool(delta) and bl.fingerprint(f) in new_fps
 
     # Machine-readable consolidated output (for ASPM/ASOC ingestion).
     consolidated = {

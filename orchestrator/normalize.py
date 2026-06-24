@@ -70,6 +70,8 @@ class Finding:
     package: str | None = None        # SCA: "name@version" for dedup/grouping
     aliases: list[str] = field(default_factory=list)  # equivalent IDs (e.g. CVEs)
     tools: list[str] = field(default_factory=list)     # set on merge (provenance)
+    description: str = ""              # human explanation / remediation hint
+    url: str = ""                     # advisory / docs link
 
     def __post_init__(self):
         if not self.tools:
@@ -133,19 +135,20 @@ def _parse_sarif(path: Path, tool: str, category: str) -> list[Finding]:
 
     findings: list[Finding] = []
     for run in data.get("runs", []) or []:
-        # Build ruleId -> rule properties for severity lookups.
+        # Build ruleId -> full rule object for severity/description lookups.
         rules = {}
         driver = (run.get("tool") or {}).get("driver") or {}
         for rule in driver.get("rules", []) or []:
-            rules[rule.get("id")] = rule.get("properties") or {}
+            rules[rule.get("id")] = rule
 
         for res in run.get("results", []) or []:
             rule_id = res.get("ruleId") or res.get("ruleIndex") or "unknown"
+            rule = rules.get(rule_id, {})
 
             # Severity: prefer CVSS from result, then rule, then SARIF level.
             sev = (
                 _security_severity(res.get("properties") or {})
-                or _security_severity(rules.get(rule_id, {}))
+                or _security_severity(rule.get("properties") or {})
                 or _LEVEL_TO_SEVERITY.get(res.get("level", "warning"), "medium")
             )
             floor = _CATEGORY_FLOOR.get(category)
@@ -153,6 +156,15 @@ def _parse_sarif(path: Path, tool: str, category: str) -> list[Finding]:
                 sev = _max_severity(sev, floor)
 
             msg = ((res.get("message") or {}).get("text") or "").strip()
+
+            # Description: rule's full text/help/short description (whichever first).
+            description = (
+                (rule.get("fullDescription") or {}).get("text")
+                or (rule.get("help") or {}).get("text")
+                or (rule.get("shortDescription") or {}).get("text")
+                or ""
+            ).strip()
+            url = rule.get("helpUri", "") or ""
 
             file_path, line = "", None
             locs = res.get("locations") or []
@@ -166,7 +178,7 @@ def _parse_sarif(path: Path, tool: str, category: str) -> list[Finding]:
             findings.append(Finding(
                 tool=tool, category=category, rule_id=str(rule_id), severity=sev,
                 message=msg or str(rule_id), file=file_path, line=line,
-                package=package,
+                package=package, description=description, url=url,
             ))
     return findings
 
@@ -193,10 +205,16 @@ def _parse_grype_json(path: Path, tool: str, category: str) -> list[Finding]:
         locs = art.get("locations") or []
         file_path = (locs[0].get("path", "") if locs else "").lstrip("/")
 
+        related = match.get("relatedVulnerabilities", [])
+        description = (vuln.get("description")
+                       or (related[0].get("description") if related else "")
+                       or "").strip()
+        url = vuln.get("dataSource", "") or ""
+
         findings.append(Finding(
             tool=tool, category=category, rule_id=str(vid), severity=sev,
             message=f"{vid} in {package or name}", file=file_path, line=None,
-            package=package, aliases=aliases,
+            package=package, aliases=aliases, description=description, url=url,
         ))
     return findings
 

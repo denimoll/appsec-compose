@@ -54,7 +54,7 @@ _Baseline: **{{ delta.new | length }} new**, {{ delta.known | length }} known, {
 
 {% if top_findings %}| Severity | Tools | Category | Rule | Location |
 |---|---|---|---|---|
-{% for f in top_findings %}| {{ f.severity }} | {{ f.tools | join(", ") }} | {{ f.category }} | `{{ f.rule_id }}` | {{ f.file }}{% if f.line %}:{{ f.line }}{% endif %} |
+{% for f in top_findings %}| {{ f.severity }}{% if f.is_new %} 🆕{% endif %} | {{ f.tools | join(", ") }} | {{ f.category }} | `{{ f.rule_id }}`{% if f.url %} [↗]({{ f.url }}){% endif %} | {{ f.file }}{% if f.line %}:{{ f.line }}{% endif %} |
 {% endfor %}{% else %}_No findings._
 {% endif %}
 > Native reports per tool are in `reports/native/`.
@@ -129,6 +129,17 @@ _HTML_TEMPLATE = """<!doctype html>
    text-transform:uppercase;letter-spacing:.4px;padding:3px 8px;border-radius:6px}
  .sev-critical{background:var(--crit)} .sev-high{background:var(--high)}
  .sev-medium{background:var(--med)} .sev-low{background:var(--low)} .sev-info{background:var(--info)}
+ .filters{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 12px}
+ .filters button{font:inherit;font-size:12.5px;padding:5px 12px;border:1px solid var(--line);
+   background:var(--card);color:var(--ink);border-radius:999px;cursor:pointer;text-transform:capitalize}
+ .filters button.active{background:var(--accent);color:#fff;border-color:var(--accent)}
+ .badge-new{display:inline-block;background:var(--accent);color:#fff;font-size:10px;font-weight:700;
+   padding:2px 6px;border-radius:5px;margin-left:6px;vertical-align:middle;letter-spacing:.3px}
+ tr.new td:first-child{box-shadow:inset 3px 0 var(--accent)}
+ details.d>summary{cursor:pointer;color:var(--accent);font-size:12px;list-style:none}
+ details.d>summary::-webkit-details-marker{display:none}
+ details.d p{margin:.45rem 0 0;color:var(--muted);font-size:12.5px;max-width:52ch;white-space:normal}
+ details.d a{color:var(--accent)}
  code,.loc{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12.5px}
  .loc{color:var(--muted)} .tool{font-weight:600}
  footer{color:var(--muted);font-size:12px;margin-top:26px}
@@ -185,16 +196,21 @@ _HTML_TEMPLATE = """<!doctype html>
 
 <h2>Top findings <span style="text-transform:none;color:var(--muted);font-weight:400">(up to {{ top_n }})</span></h2>
 {% if top_findings %}
+<div class="filters" id="filters">
+  <button class="active" data-f="all">All ({{ top_findings | length }})</button>
+  {% for cat, n in category_counts %}<button data-f="{{ cat }}">{{ cat }} ({{ n }})</button>{% endfor %}
+</div>
 <table>
-  <thead><tr><th>Severity</th><th>Tools</th><th>Category</th><th>Rule</th><th>Location</th></tr></thead>
+  <thead><tr><th>Severity</th><th>Tools</th><th>Category</th><th>Rule</th><th>Location</th><th>Detail</th></tr></thead>
   <tbody>
   {% for f in top_findings %}
-    <tr>
-      <td><span class="sev sev-{{ f.severity }}">{{ f.severity }}</span></td>
+    <tr data-cat="{{ f.category }}"{% if f.is_new %} class="new"{% endif %}>
+      <td><span class="sev sev-{{ f.severity }}">{{ f.severity }}</span>{% if f.is_new %}<span class="badge-new">NEW</span>{% endif %}</td>
       <td class="tool">{{ f.tools | join(", ") }}</td>
       <td>{{ f.category }}</td>
       <td><code>{{ f.rule_id }}</code>{% if f.aliases %}<br><span class="loc">{{ f.aliases | join(", ") }}</span>{% endif %}</td>
       <td class="loc">{{ f.file }}{% if f.line %}:{{ f.line }}{% endif %}</td>
+      <td>{% if f.description or f.url %}<details class="d"><summary>ⓘ details</summary><p>{% if f.description %}{{ f.description | truncate(360, True) }}{% endif %}{% if f.url %}{% if f.description %}<br>{% endif %}<a href="{{ f.url }}" target="_blank" rel="noopener noreferrer">advisory ↗</a>{% endif %}</p></details>{% else %}<span class="loc">—</span>{% endif %}</td>
     </tr>
   {% endfor %}
   </tbody>
@@ -204,7 +220,25 @@ _HTML_TEMPLATE = """<!doctype html>
 <footer>Native per-tool reports are in <code>reports/native/</code>;
 consolidated machine output in <code>reports/findings.json</code>.</footer>
 
-</div></body></html>
+</div>
+<script>
+(function () {
+  var bar = document.getElementById('filters');
+  if (!bar) return;
+  bar.addEventListener('click', function (e) {
+    var b = e.target.closest('button');
+    if (!b) return;
+    var f = b.getAttribute('data-f');
+    bar.querySelectorAll('button').forEach(function (x) {
+      x.classList.toggle('active', x === b);
+    });
+    document.querySelectorAll('tbody tr').forEach(function (tr) {
+      tr.style.display = (f === 'all' || tr.getAttribute('data-cat') === f) ? '' : 'none';
+    });
+  });
+})();
+</script>
+</body></html>
 """
 
 _TOP_N = 50
