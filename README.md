@@ -10,6 +10,9 @@ It is a **thin, stateless orchestrator**: no database, no web UI, no workers.
 Each scanner runs as a one-shot Docker Compose service; a small Python collector
 aggregates the reports and produces a CI-meaningful exit code.
 
+What's planned (multi-project profiles, scheduling, a minimal UI, ASPM push) is
+tracked in [ROADMAP.md](ROADMAP.md).
+
 ## Engines
 
 | Category | Tool | Default | Output |
