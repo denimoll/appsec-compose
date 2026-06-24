@@ -82,11 +82,16 @@ def main() -> int:
     offline = bool(cfg.get("offline", False))
     pins = _load_lock()
 
-    # Scan target: a container image (ASS_IMAGE from run.sh --image) or the repo
-    # filesystem mounted at /code.
+    # Scan target (set by run.sh): a docker-archive tar (build mode), a registry
+    # image ref (--image), or the repo filesystem mounted at /code.
     image = os.environ.get("ASS_IMAGE", "").strip()
-    grype_target = image or "dir:/code"
-    syft_target = image or "dir:/code"
+    tar = os.environ.get("ASS_IMAGE_TAR", "").strip()
+    if tar:
+        grype_target = syft_target = f"docker-archive:{tar}"
+    elif image:
+        grype_target = syft_target = image
+    else:
+        grype_target = syft_target = "dir:/code"
 
     sbom_on = bool(cfg.get("sbom", True))
     formats = cfg.get("sbom_formats", ["cyclonedx"]) or []
@@ -115,6 +120,7 @@ def main() -> int:
         "ASS_SBOM_CDX": "1" if sbom_on and "cyclonedx" in formats else "0",
         "ASS_SBOM_SPDX": "1" if sbom_on and "spdx" in formats else "0",
         "ASS_IMAGE": image,
+        "ASS_IMAGE_TAR": tar,
         "ASS_GRYPE_TARGET": grype_target,
         "ASS_SYFT_TARGET": syft_target,
         "FAIL_ON": str(cfg.get("fail_on", "high")),

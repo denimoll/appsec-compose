@@ -43,25 +43,26 @@ services:
     entrypoint: ["/bin/sh", "-c"]
     command:
       - |
-        if [ -n "$$ASS_IMAGE" ]; then
-          trivy image --quiet $$TRIVY_DB_FLAGS --scanners vuln,secret --format sarif --output /reports/native/trivy-fs.sarif "$$ASS_IMAGE"
-          [ "$$ASS_SBOM_CDX" = "1" ] && trivy image --quiet $$TRIVY_DB_FLAGS --format cyclonedx --output /reports/sbom.trivy.cdx.json "$$ASS_IMAGE" || true
-          [ "$$ASS_SBOM_SPDX" = "1" ] && trivy image --quiet $$TRIVY_DB_FLAGS --format spdx-json --output /reports/sbom.trivy.spdx.json "$$ASS_IMAGE" || true
-        else
-          trivy fs --quiet $$TRIVY_DB_FLAGS --scanners vuln,secret --format sarif --output /reports/native/trivy-fs.sarif /code
-          trivy config --quiet --format sarif --output /reports/native/trivy-config.sarif /code
-          [ "$$ASS_SBOM_CDX" = "1" ] && trivy fs --quiet $$TRIVY_DB_FLAGS --format cyclonedx --output /reports/sbom.trivy.cdx.json /code || true
-          [ "$$ASS_SBOM_SPDX" = "1" ] && trivy fs --quiet $$TRIVY_DB_FLAGS --format spdx-json --output /reports/sbom.trivy.spdx.json /code || true
-        fi
+        if [ -n "$$ASS_IMAGE_TAR" ]; then SRC=image; SRCARG="--input $$ASS_IMAGE_TAR";
+        elif [ -n "$$ASS_IMAGE" ]; then SRC=image; SRCARG="$$ASS_IMAGE";
+        else SRC=fs; SRCARG=/code; fi
+        trivy $$SRC --quiet $$TRIVY_DB_FLAGS --scanners vuln,secret --format sarif --output /reports/native/trivy-fs.sarif $$SRCARG
+        [ "$$SRC" = fs ] && trivy config --quiet --format sarif --output /reports/native/trivy-config.sarif /code || true
+        [ "$$ASS_SBOM_CDX" = "1" ] && trivy $$SRC --quiet $$TRIVY_DB_FLAGS --format cyclonedx --output /reports/sbom.trivy.cdx.json $$SRCARG || true
+        [ "$$ASS_SBOM_SPDX" = "1" ] && trivy $$SRC --quiet $$TRIVY_DB_FLAGS --format spdx-json --output /reports/sbom.trivy.spdx.json $$SRCARG || true
     environment:
       TRIVY_DB_FLAGS: ${TRIVY_DB_FLAGS:-}
       ASS_IMAGE: ${ASS_IMAGE:-}
+      ASS_IMAGE_TAR: ${ASS_IMAGE_TAR:-}
       ASS_SBOM_CDX: ${ASS_SBOM_CDX:-1}
       ASS_SBOM_SPDX: ${ASS_SBOM_SPDX:-0}
+      DOCKER_CONFIG: /dockercfg
     volumes:
       - *code-mount
       - ./reports:/reports
       - ./cache/trivy:/root/.cache/trivy
+      - ./.img-archive:/archive:ro
+      - ${ASS_DOCKER_CONFIG:-./.img-empty}:/dockercfg:ro
 
   # ---- Secrets ----------------------------------------------------------
   gitleaks:
@@ -112,10 +113,13 @@ services:
     environment:
       GRYPE_DB_CACHE_DIR: /cache/grype
       GRYPE_DB_AUTO_UPDATE: ${GRYPE_DB_AUTO_UPDATE:-true}
+      DOCKER_CONFIG: /dockercfg
     volumes:
       - *code-mount
       - ./reports:/reports
       - ./cache/grype:/cache/grype
+      - ./.img-archive:/archive:ro
+      - ${ASS_DOCKER_CONFIG:-./.img-empty}:/dockercfg:ro
 
   # ---- Secrets (alternative) -------------------------------------------
   trufflehog:
@@ -143,9 +147,13 @@ services:
       - "-o"
       - "spdx-json=/reports/sbom.syft.spdx.json"
       - "-q"
+    environment:
+      DOCKER_CONFIG: /dockercfg
     volumes:
       - *code-mount
       - ./reports:/reports
+      - ./.img-archive:/archive:ro
+      - ${ASS_DOCKER_CONFIG:-./.img-empty}:/dockercfg:ro
 
   # ---- IaC (Dockerfile lint) -------------------------------------------
   hadolint:

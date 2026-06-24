@@ -43,6 +43,10 @@ reports are what you upload to an ASPM.
 
 # scan a container image instead of a repo (Trivy / Grype / Syft):
 ./run.sh --image nginx:1.27
+# a private image (or set REGISTRY_USER / REGISTRY_PASS in the env):
+./run.sh --image ghcr.io/me/app:1.0 --registry-user me --registry-pass "$TOKEN"
+# build from a Dockerfile and scan the result:
+./run.sh --build ./path/to/context [--dockerfile Dockerfile.prod]
 ```
 
 ## Configuration — one file
@@ -192,6 +196,14 @@ image-capable tools run — **Trivy** and **Grype** (OS + language package
 vulnerabilities) and **Syft** (SBOM); source-only scanners (Semgrep, Checkov,
 Gitleaks, Hadolint) are skipped. Dedup, suppressions, baseline, SBOM formats and
 the policy gate all work the same way.
+
+- **Private registries** — pass `--registry-user/--registry-pass` (or set
+  `REGISTRY_USER`/`REGISTRY_PASS`). The scanners pull the image themselves using
+  a generated docker auth config; no Docker socket is mounted.
+- **Build & scan** — `./run.sh --build <context> [--dockerfile <path>]` builds
+  the image with the host Docker, exports it to a tar (`docker save`) and scans
+  that archive — so locally-built images are scanned without a registry or a
+  Docker socket in the scanner containers.
 
 ## Reproducible / pinned images
 

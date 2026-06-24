@@ -22,3 +22,5 @@ __pycache__/
 .DS_Store
 .claude/
 .img-empty/
+.img-archive/
+.docker-auth/
