@@ -197,6 +197,8 @@ services:
       FAIL_ON: ${FAIL_ON:-}
       ASS_UPDATE_BASELINE: ${ASS_UPDATE_BASELINE:-}
       ASS_IMAGE: ${ASS_IMAGE:-}
+      ASS_IMAGE_TAR: ${ASS_IMAGE_TAR:-}
+      ASS_ENABLED: ${ASS_ENABLED:-}
     volumes:
       - ./reports:/reports
       - ./scan-config.yml:/app/scan-config.yml:ro

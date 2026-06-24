@@ -110,6 +110,7 @@ fi
 if [[ -z "${ASS_ENABLED// }" ]]; then
   echo "Error: no scanners enabled in scan-config.yml" >&2; exit 2
 fi
+export ASS_ENABLED   # tell the collector which scanners actually ran
 
 if [[ "$ASS_OFFLINE" == "1" && "$IMAGE_MODE" != "1" && ! -s cache/semgrep/default.yaml ]]; then
   echo "Error: offline=true but no cache found. Run ./preload.sh first (with network)." >&2

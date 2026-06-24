@@ -32,10 +32,25 @@ def main() -> int:
     trufflehog_json_to_sarif(Path(NATIVE_DIR, "trufflehog.json"),
                              Path(NATIVE_DIR, "trufflehog.sarif"))
 
-    expected = expected_reports(cfg.enabled_scanners)
-    if os.environ.get("ASS_IMAGE"):
+    # Use the scanners that actually ran (run.sh passes the filtered list in
+    # image mode); fall back to everything enabled in the config.
+    env_enabled = os.environ.get("ASS_ENABLED", "").split()
+    enabled = set(env_enabled) if env_enabled else cfg.enabled_scanners
+
+    image_mode = bool(os.environ.get("ASS_IMAGE") or os.environ.get("ASS_IMAGE_TAR"))
+    expected = expected_reports(enabled)
+    if image_mode:
         expected.discard("trivy-config.sarif")   # no IaC config scan in image mode
     result = load_findings(NATIVE_DIR, expected=expected)
+
+    # In image mode, a vuln scanner that ran but produced no report means the
+    # image could not be pulled/loaded — fail loudly instead of "0 findings".
+    if image_mode and ({"trivy", "grype"} & enabled) and not result.reports_found:
+        target = os.environ.get("ASS_IMAGE") or "the built image"
+        print(f"ERROR: failed to pull or scan {target}. "
+              f"Check the image reference and registry credentials.", file=sys.stderr)
+        return 2
+
     merged, stats = merge(result.findings, enabled=cfg.dedup)
     kept, suppressed = apply_ignore(merged, cfg.ignore)
 
