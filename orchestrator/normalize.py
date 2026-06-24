@@ -10,6 +10,7 @@ import json
 import re
 from dataclasses import dataclass, asdict, field
 from pathlib import Path
+from urllib.parse import unquote
 
 # Each source: (filename, tool label, category, parser format).
 SOURCES = [
@@ -139,6 +140,20 @@ def _osv_package(message: str) -> str | None:
 
 _SCA_PACKAGE = {"trivy": _trivy_package, "osv": _osv_package}
 
+# The repo is bind-mounted at /code inside the scanners; strip that prefix (and
+# any file:// scheme / percent-encoding) so report paths are repo-relative.
+def _clean_path(uri: str) -> str:
+    if not uri:
+        return ""
+    p = unquote(uri)
+    if p.startswith("file://"):
+        p = p[len("file://"):]
+    if p.startswith("/code/"):
+        return p[len("/code/"):]
+    if p == "/code":
+        return ""
+    return p
+
 
 def _parse_sarif(path: Path, tool: str, category: str) -> list[Finding]:
     """Parse one SARIF file. Raises ValueError if the file is not valid SARIF."""
@@ -184,7 +199,7 @@ def _parse_sarif(path: Path, tool: str, category: str) -> list[Finding]:
             locs = res.get("locations") or []
             if locs:
                 phys = (locs[0].get("physicalLocation") or {})
-                file_path = (phys.get("artifactLocation") or {}).get("uri", "")
+                file_path = _clean_path((phys.get("artifactLocation") or {}).get("uri", ""))
                 line = (phys.get("region") or {}).get("startLine")
 
             package = None
