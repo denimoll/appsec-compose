@@ -40,6 +40,9 @@ reports are what you upload to an ASPM.
 ./run.sh /path/to/your/repo
 # default fails (exit 1) on high+ findings; override per run:
 ./run.sh /path/to/your/repo --fail-on critical
+
+# scan a container image instead of a repo (Trivy / Grype / Syft):
+./run.sh --image nginx:1.27
 ```
 
 ## Configuration — one file
@@ -56,7 +59,8 @@ scanners:
   gitleaks: { enabled: true, version: "v8.21.2" }    # secrets
   checkov:  { enabled: true, version: "3.2.334" }    # IaC
 
-sbom: true                 # CycloneDX SBOM via Trivy
+sbom: true                 # SBOM via Trivy
+sbom_formats: [cyclonedx]  # any of: cyclonedx, spdx
 fail_on: high              # critical|high|medium|low|none (none = report-only)
 unknown_severity: medium
 offline: false             # use ./preload.sh cache, no network during scan
@@ -96,8 +100,8 @@ reports/
 │   ├── grype.sarif         # + grype.json (carries CVE/GHSA aliases for dedup)
 │   └── trufflehog.json     # + generated trufflehog.sarif
 ├── findings.json           # consolidated, de-duplicated findings + counts
-├── sbom.trivy.cdx.json     # CycloneDX SBOM (Trivy)
-├── sbom.syft.cdx.json      # CycloneDX SBOM (Syft, if enabled)
+├── sbom.trivy.cdx.json     # CycloneDX SBOM (Trivy; .spdx.json if enabled)
+├── sbom.syft.cdx.json      # Syft SBOM (CycloneDX + SPDX, if enabled)
 ├── summary.md              # human summary
 └── summary.html            # human summary (styled)
 ```
@@ -180,6 +184,14 @@ Each finding gets a stable fingerprint `(category, id, file, package, line)`.
 Runs report `new` / `known` / `fixed` counts (in the console, summary and
 `findings.json`), and `fail_on` applies to **new** findings only. Re-run
 `--update-baseline` to re-accept the current state.
+
+## Scanning a container image
+
+`./run.sh --image <ref>` scans a container image instead of a repo. Only the
+image-capable tools run — **Trivy** and **Grype** (OS + language package
+vulnerabilities) and **Syft** (SBOM); source-only scanners (Semgrep, Checkov,
+Gitleaks, Hadolint) are skipped. Dedup, suppressions, baseline, SBOM formats and
+the policy gate all work the same way.
 
 ## Reproducible / pinned images
 

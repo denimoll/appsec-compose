@@ -15,6 +15,7 @@ form (consumed by pin.sh).
 """
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
@@ -81,6 +82,16 @@ def main() -> int:
     offline = bool(cfg.get("offline", False))
     pins = _load_lock()
 
+    # Scan target: a container image (ASS_IMAGE from run.sh --image) or the repo
+    # filesystem mounted at /code.
+    image = os.environ.get("ASS_IMAGE", "").strip()
+    grype_target = image or "dir:/code"
+    syft_target = image or "dir:/code"
+
+    sbom_on = bool(cfg.get("sbom", True))
+    formats = cfg.get("sbom_formats", ["cyclonedx"]) or []
+    formats = [str(f).lower() for f in formats]
+
     def version(name: str, default: str) -> str:
         return str((scanners.get(name) or {}).get("version", default))
 
@@ -101,7 +112,11 @@ def main() -> int:
         "GRYPE_DB_AUTO_UPDATE": "false" if offline else "true",
         # Empty => gitleaks scans git history; default skips it (working tree only).
         "GITLEAKS_GIT_FLAG": "" if cfg.get("secrets_history", False) else "--no-git",
-        "ASS_SBOM": "1" if cfg.get("sbom", True) else "0",
+        "ASS_SBOM_CDX": "1" if sbom_on and "cyclonedx" in formats else "0",
+        "ASS_SBOM_SPDX": "1" if sbom_on and "spdx" in formats else "0",
+        "ASS_IMAGE": image,
+        "ASS_GRYPE_TARGET": grype_target,
+        "ASS_SYFT_TARGET": syft_target,
         "FAIL_ON": str(cfg.get("fail_on", "high")),
         # All tag refs (for ./pin.sh to resolve to digests).
         "ASS_TAGREFS": " ".join(env[f"{p}_TAGREF"] for _, _, p in TOOLS.values()),

@@ -32,7 +32,10 @@ def main() -> int:
     trufflehog_json_to_sarif(Path(NATIVE_DIR, "trufflehog.json"),
                              Path(NATIVE_DIR, "trufflehog.sarif"))
 
-    result = load_findings(NATIVE_DIR, expected=expected_reports(cfg.enabled_scanners))
+    expected = expected_reports(cfg.enabled_scanners)
+    if os.environ.get("ASS_IMAGE"):
+        expected.discard("trivy-config.sarif")   # no IaC config scan in image mode
+    result = load_findings(NATIVE_DIR, expected=expected)
     merged, stats = merge(result.findings, enabled=cfg.dedup)
     kept, suppressed = apply_ignore(merged, cfg.ignore)
 
@@ -111,7 +114,7 @@ def main() -> int:
     gate_scope = "new " if delta is not None else ""
     print(f"Policy fail_on={policy.threshold} -> {verdict} "
           f"({policy.breaching} {gate_scope}at/above threshold)")
-    sboms = sorted(p.name for p in Path(REPORTS_DIR).glob("sbom.*.cdx.json"))
+    sboms = sorted(p.name for p in Path(REPORTS_DIR).glob("sbom.*.json"))
     sbom_note = (" | " + " | ".join(sboms)) if sboms else ""
     print(f"Reports: {REPORTS_DIR}/summary.md | summary.html | findings.json"
           f"{sbom_note} | native/")

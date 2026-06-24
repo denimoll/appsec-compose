@@ -36,19 +36,28 @@ services:
       - ./cache/semgrep:/cache/semgrep
 
   # ---- SCA + IaC + SBOM (Trivy covers all three) ------------------------
+  # Scans the repo filesystem, or a container image when ASS_IMAGE is set
+  # (./run.sh --image <ref>). SBOM formats are controlled by ASS_SBOM_CDX/SPDX.
   trivy:
     image: ${TRIVY_IMAGE:-aquasec/trivy:0.58.0}
     entrypoint: ["/bin/sh", "-c"]
-    # TRIVY_DB_FLAGS is empty online, or skip-update/offline-scan when offline.
-    # ASS_SBOM toggles the CycloneDX SBOM step.
     command:
       - |
-        trivy fs --quiet ${TRIVY_DB_FLAGS:-} --scanners vuln,secret --format sarif --output /reports/native/trivy-fs.sarif /code
-        trivy config --quiet --format sarif --output /reports/native/trivy-config.sarif /code
-        [ "${ASS_SBOM:-1}" = "1" ] && trivy fs --quiet ${TRIVY_DB_FLAGS:-} --format cyclonedx --output /reports/sbom.trivy.cdx.json /code || true
+        if [ -n "$$ASS_IMAGE" ]; then
+          trivy image --quiet $$TRIVY_DB_FLAGS --scanners vuln,secret --format sarif --output /reports/native/trivy-fs.sarif "$$ASS_IMAGE"
+          [ "$$ASS_SBOM_CDX" = "1" ] && trivy image --quiet $$TRIVY_DB_FLAGS --format cyclonedx --output /reports/sbom.trivy.cdx.json "$$ASS_IMAGE" || true
+          [ "$$ASS_SBOM_SPDX" = "1" ] && trivy image --quiet $$TRIVY_DB_FLAGS --format spdx-json --output /reports/sbom.trivy.spdx.json "$$ASS_IMAGE" || true
+        else
+          trivy fs --quiet $$TRIVY_DB_FLAGS --scanners vuln,secret --format sarif --output /reports/native/trivy-fs.sarif /code
+          trivy config --quiet --format sarif --output /reports/native/trivy-config.sarif /code
+          [ "$$ASS_SBOM_CDX" = "1" ] && trivy fs --quiet $$TRIVY_DB_FLAGS --format cyclonedx --output /reports/sbom.trivy.cdx.json /code || true
+          [ "$$ASS_SBOM_SPDX" = "1" ] && trivy fs --quiet $$TRIVY_DB_FLAGS --format spdx-json --output /reports/sbom.trivy.spdx.json /code || true
+        fi
     environment:
       TRIVY_DB_FLAGS: ${TRIVY_DB_FLAGS:-}
-      ASS_SBOM: ${ASS_SBOM:-1}
+      ASS_IMAGE: ${ASS_IMAGE:-}
+      ASS_SBOM_CDX: ${ASS_SBOM_CDX:-1}
+      ASS_SBOM_SPDX: ${ASS_SBOM_SPDX:-0}
     volumes:
       - *code-mount
       - ./reports:/reports
@@ -92,8 +101,9 @@ services:
     # entrypoint is `grype`; default exit code is 0. SARIF is the native ASPM
     # artifact; the JSON carries relatedVulnerabilities (GHSA<->CVE aliases) and
     # package info that the collector uses for cross-tool SCA de-duplication.
+    # Target is dir:/code, or a container image when ASS_GRYPE_TARGET is set.
     command:
-      - "dir:/code"
+      - "${ASS_GRYPE_TARGET:-dir:/code}"
       - "-o"
       - "sarif=/reports/native/grype.sarif"
       - "-o"
@@ -122,10 +132,17 @@ services:
       - ./reports:/reports
 
   # ---- SBOM (alternative generator) ------------------------------------
+  # Emits both CycloneDX and SPDX. Target is dir:/code or a container image.
   syft:
     image: ${SYFT_IMAGE:-anchore/syft:v1.18.0}
-    # entrypoint is `syft`; writes a CycloneDX SBOM artifact (no findings).
-    command: ["scan", "dir:/code", "-o", "cyclonedx-json=/reports/sbom.syft.cdx.json", "-q"]
+    command:
+      - "scan"
+      - "${ASS_SYFT_TARGET:-dir:/code}"
+      - "-o"
+      - "cyclonedx-json=/reports/sbom.syft.cdx.json"
+      - "-o"
+      - "spdx-json=/reports/sbom.syft.spdx.json"
+      - "-q"
     volumes:
       - *code-mount
       - ./reports:/reports
@@ -171,6 +188,7 @@ services:
     environment:
       FAIL_ON: ${FAIL_ON:-}
       ASS_UPDATE_BASELINE: ${ASS_UPDATE_BASELINE:-}
+      ASS_IMAGE: ${ASS_IMAGE:-}
     volumes:
       - ./reports:/reports
       - ./scan-config.yml:/app/scan-config.yml:ro
