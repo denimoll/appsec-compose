@@ -5,6 +5,8 @@
 
 # ---- Scanners --------------------------------------------------------
 # Toggle each check on/off and pin its image version (bump to upgrade).
+# `version` may be a tag ("1.97.0") or a digest ("sha256:abc...") to pin one
+# tool immutably; ./pin.sh pins all of them at once via image-digests.lock.
 # Several tools cover the same category — enable one, or several at once;
 # every enabled tool produces its own native report and all are aggregated.
 scanners:
@@ -37,7 +39,7 @@ scanners:
   # -- SBOM generator — Syft (Trivy also emits one via `sbom:` below) --
   syft:                    # CycloneDX SBOM (Anchore) -> reports/sbom.syft.cdx.json
     enabled: false
-    version: "v1.18.0"
+    version: "sha256:a2066c7d582669db5c9191ed8b8055766a63a3c231b4134a5c75e65a70f30b23"
 
 # ---- Extra artifacts -------------------------------------------------
 sbom: true                 # CycloneDX SBOM via Trivy -> reports/sbom.trivy.cdx.json

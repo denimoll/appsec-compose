@@ -186,6 +186,9 @@ Commit `image-digests.lock`; `render-env.py` then runs every scanner by digest.
 Re-run `./pin.sh` after bumping a version (a bumped version with no matching
 lock entry safely falls back to its tag). Delete the lock to go back to tags.
 
+To pin a **single** tool by hand, put a digest in its `version` field instead of
+a tag — `version: "sha256:abc..."` resolves to `repo@sha256:abc...`.
+
 ## How it works
 
 1. `run.sh` renders `scan-config.yml` → `.env` and bind-mounts the target repo

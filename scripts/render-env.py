@@ -44,6 +44,21 @@ SEMGREP_OFFLINE_RULES = "/cache/semgrep/default.yaml"
 TRIVY_OFFLINE_FLAGS = "--skip-db-update --skip-java-db-update --offline-scan"
 
 
+def _image_ref(repo: str, ver: str) -> str:
+    """Build an image ref from a `version` that may be a tag OR a digest.
+
+    `1.97.0`            -> repo:1.97.0
+    `sha256:abc...`     -> repo@sha256:abc...
+    `@sha256:abc...`    -> repo@sha256:abc...
+    """
+    ver = ver.strip()
+    if ver.startswith("@"):
+        return f"{repo}{ver}"
+    if ver.startswith("sha256:"):
+        return f"{repo}@{ver}"
+    return f"{repo}:{ver}"
+
+
 def _load_lock() -> dict[str, str]:
     """Map `repo:tag` -> `repo@sha256:...` from image-digests.lock."""
     pins: dict[str, str] = {}
@@ -71,10 +86,12 @@ def main() -> int:
 
     env: dict[str, str] = {}
     for tool, (repo, default_ver, prefix) in TOOLS.items():
-        tagref = f"{repo}:{version(tool, default_ver)}"
-        env[f"{prefix}_VERSION"] = version(tool, default_ver)
+        ver = version(tool, default_ver)
+        # `version` may already be a digest (manual per-tool pin); honour it.
+        tagref = _image_ref(repo, ver)
+        env[f"{prefix}_VERSION"] = ver
         env[f"{prefix}_TAGREF"] = tagref
-        env[f"{prefix}_IMAGE"] = pins.get(tagref, tagref)   # digest if pinned
+        env[f"{prefix}_IMAGE"] = pins.get(tagref, tagref)   # lock digest if pinned
 
     env.update({
         "SEMGREP_RULES": SEMGREP_OFFLINE_RULES if offline else SEMGREP_ONLINE_RULES,
