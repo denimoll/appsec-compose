@@ -49,6 +49,19 @@ unknown_severity: medium   # how to rank findings that carry no severity
 dedup: true                # merge duplicate findings across tools
                            # (e.g. Trivy CVE == Grype GHSA via aliases)
 
+# Suppressions: drop matching findings from the gate and counts (kept in
+# findings.json under "suppressed" with the reason). An entry matches when every
+# field present matches; `rule` is a glob over the ID and its aliases.
+ignore: []
+# ignore:
+#   - rule: CVE-2018-1000656            # accept a specific vuln
+#     reason: "no fix available, mitigated at the proxy"
+#   - file: "tests/**"                  # ignore everything under tests/
+#     reason: "test fixtures"
+#   - rule: "generic.*"                 # glob over rule ids
+#     category: secrets
+#     reason: "false positives in sample data"
+
 # ---- Offline / air-gapped --------------------------------------------
 offline: false             # true => use DBs/rules preloaded by ./preload.sh,
                            #         no network downloads during the scan

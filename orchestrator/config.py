@@ -19,6 +19,7 @@ class Config:
     fail_on: str = "high"
     unknown_severity: str = "medium"
     dedup: bool = True
+    ignore: list = field(default_factory=list)
     scanners: dict = field(default_factory=dict)
 
     @property
@@ -37,6 +38,7 @@ def load_config(path: str = "/app/scan-config.yml") -> Config:
         fail_on=str(raw.get("fail_on", "high")).lower(),
         unknown_severity=str(raw.get("unknown_severity", "medium")).lower(),
         dedup=bool(raw.get("dedup", True)),
+        ignore=raw.get("ignore", []) or [],
         scanners=raw.get("scanners", {}) or {},
     )
 

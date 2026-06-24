@@ -16,6 +16,7 @@ from dedup import merge
 from normalize import load_findings, finding_to_dict, expected_reports
 from policy import evaluate
 from summary import render
+from suppress import apply as apply_ignore
 
 REPORTS_DIR = "/reports"
 NATIVE_DIR = f"{REPORTS_DIR}/native"
@@ -30,7 +31,8 @@ def main() -> int:
 
     result = load_findings(NATIVE_DIR, expected=expected_reports(cfg.enabled_scanners))
     merged, stats = merge(result.findings, enabled=cfg.dedup)
-    policy = evaluate(merged, cfg, raw_findings=result.findings)
+    kept, suppressed = apply_ignore(merged, cfg.ignore)
+    policy = evaluate(kept, cfg, raw_findings=result.findings)
 
     # Machine-readable consolidated output (for ASPM/ASOC ingestion).
     consolidated = {
@@ -45,17 +47,20 @@ def main() -> int:
             "unique_findings": stats.unique,
             "duplicates_removed": stats.removed,
         },
+        "suppressed_count": len(suppressed),
         "severity_counts": policy.severity_counts,
         "category_counts": policy.category_counts,
         "tool_counts": policy.tool_counts,
         "reports_found": result.reports_found,
         "reports_missing": result.reports_missing,
         "reports_errored": result.reports_errored,
-        "findings": [finding_to_dict(f) for f in merged],
+        "findings": [finding_to_dict(f) for f in kept],
+        "suppressed": [{**finding_to_dict(s.finding), "reason": s.reason}
+                       for s in suppressed],
     }
     Path(REPORTS_DIR, "findings.json").write_text(json.dumps(consolidated, indent=2))
 
-    render(result, policy, merged, stats, REPORTS_DIR)
+    render(result, policy, kept, stats, REPORTS_DIR, suppressed_count=len(suppressed))
 
     # Console summary.
     total = sum(policy.severity_counts.values())
@@ -66,6 +71,8 @@ def main() -> int:
           f"{len(result.reports_found)} report(s){dup_note}")
     for sev in ["critical", "high", "medium", "low", "info"]:
         print(f"  {sev:>8}: {policy.severity_counts[sev]}")
+    if suppressed:
+        print(f"  (suppressed by ignore rules: {len(suppressed)})")
     if result.reports_missing:
         print(f"  ! missing reports: {', '.join(result.reports_missing)}")
     if result.reports_errored:

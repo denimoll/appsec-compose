@@ -24,6 +24,9 @@ _Generated: {{ generated }} UTC_
 {% if stats.removed %}
 _Deduplicated: {{ total }} unique of {{ stats.raw }} raw findings ({{ stats.removed }} merged)._
 {% endif %}
+{% if suppressed_count %}
+_Suppressed by ignore rules: {{ suppressed_count }} (excluded from the gate)._
+{% endif %}
 ## Totals by severity
 
 | {{ sev_order | join(" | ") }} | Total |
@@ -129,7 +132,7 @@ _HTML_TEMPLATE = """<!doctype html>
 </style></head><body>
 <header><div class="wrap">
   <div class="brand"><span class="dot"></span>appsec-compose</div>
-  <div class="sub">Generated {{ generated }} UTC &middot; policy fail_on = {{ policy.threshold }}{% if stats.removed %} &middot; {{ total }} unique of {{ stats.raw }} ({{ stats.removed }} merged){% endif %}</div>
+  <div class="sub">Generated {{ generated }} UTC &middot; policy fail_on = {{ policy.threshold }}{% if stats.removed %} &middot; {{ total }} unique of {{ stats.raw }} ({{ stats.removed }} merged){% endif %}{% if suppressed_count %} &middot; {{ suppressed_count }} suppressed{% endif %}</div>
   <div class="pill {{ 'fail' if policy.exit_code else 'pass' }}">
     <span class="big">{{ '✗' if policy.exit_code else '✓' }} {{ verdict }}</span>
     &middot; {{ policy.breaching }} at/above threshold
@@ -208,14 +211,15 @@ def _sort_findings(findings: list[Finding]) -> list[Finding]:
     return sorted(findings, key=lambda f: (-_RANK[f.severity], f.category, f.file))
 
 
-def _context(result: ScanResult, policy: PolicyResult,
-             findings: list[Finding], stats: DedupStats) -> dict:
+def _context(result: ScanResult, policy: PolicyResult, findings: list[Finding],
+             stats: DedupStats, suppressed_count: int) -> dict:
     total = sum(policy.severity_counts.values())
     top = _sort_findings(findings)[:_TOP_N]
     return {
         "generated": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
         "policy": policy,
         "stats": stats,
+        "suppressed_count": suppressed_count,
         "verdict": "FAIL" if policy.exit_code else "PASS",
         "sev_order": _DISPLAY_ORDER,
         "total": total,
@@ -230,9 +234,10 @@ def _context(result: ScanResult, policy: PolicyResult,
 
 
 def render(result: ScanResult, policy: PolicyResult, findings: list[Finding],
-           stats: DedupStats, out_dir: str = "/reports") -> None:
+           stats: DedupStats, out_dir: str = "/reports",
+           suppressed_count: int = 0) -> None:
     env = Environment(autoescape=False, trim_blocks=True, lstrip_blocks=True)
-    ctx = _context(result, policy, findings, stats)
+    ctx = _context(result, policy, findings, stats, suppressed_count)
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
     (out / "summary.md").write_text(env.from_string(_MD_TEMPLATE).render(**ctx))

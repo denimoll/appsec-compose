@@ -31,7 +31,12 @@ class DedupStats:
 
 
 def _norm_file(path: str) -> str:
-    return (path or "").lstrip("./").lstrip("/")
+    # Align paths across tools: some report relative ("app.py"), others report
+    # the container mount ("/code/app.py"). /code is our fixed mount root.
+    p = (path or "").lstrip("./").lstrip("/")
+    if p.startswith("code/"):
+        p = p[len("code/"):]
+    return p
 
 
 def _id_tokens(f: Finding) -> set[str]:

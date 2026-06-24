@@ -135,6 +135,27 @@ reported it, and lists the equivalent IDs as aliases. `findings.json` reports
 `raw_findings`, `unique_findings` and `duplicates_removed`. Per-tool counts
 still reflect each tool's true raw yield.
 
+## Suppressions
+
+Drop known/accepted findings from the gate and counts via an `ignore:` list in
+`scan-config.yml`. An entry matches when every field present matches; `rule` is
+a glob over the finding's ID **and its aliases** (so a single CVE entry also
+catches the equivalent GHSA):
+
+```yaml
+ignore:
+  - rule: CVE-2018-1000656
+    reason: "no fix available, mitigated at the proxy"
+  - file: "tests/**"
+    reason: "test fixtures"
+  - rule: "generic.*"
+    category: secrets
+    reason: "false positives in sample data"
+```
+
+Suppressed findings are excluded from `fail_on` but recorded in `findings.json`
+under `suppressed` (with the reason) for the audit trail.
+
 ## How it works
 
 1. `run.sh` renders `scan-config.yml` → `.env` and bind-mounts the target repo
