@@ -23,17 +23,20 @@ services:
   semgrep:
     image: ${SEMGREP_IMAGE:-semgrep/semgrep:1.97.0}
     entrypoint: ["/bin/sh", "-c"]
-    # Single list item => the whole script is passed as one arg to `sh -c`.
-    # SEMGREP_RULES = `p/default` online (curated multi-language pack, no
-    # telemetry/login) or a preloaded local YAML when offline.
+    # SEMGREP_CONFIGS = one or more `--config <ref>` built by render-env from
+    # scan-config.yml (default pack, custom registry refs, `auto` stack-detect,
+    # and the local ./semgrep-rules drop-in dir mounted at /semgrep-rules).
     command:
       - >-
-        semgrep scan --config "${SEMGREP_RULES:-p/default}" --metrics off
+        semgrep scan $$SEMGREP_CONFIGS --metrics off
         --sarif --output /reports/native/semgrep.sarif /code || true
+    environment:
+      SEMGREP_CONFIGS: ${SEMGREP_CONFIGS:---config p/default}
     volumes:
       - *code-mount
       - ./reports:/reports
       - ./cache/semgrep:/cache/semgrep
+      - ./semgrep-rules:/semgrep-rules:ro
 
   # ---- SCA + IaC + SBOM (Trivy covers all three) ------------------------
   # Scans the repo filesystem, or a container image when ASS_IMAGE is set

@@ -46,6 +46,76 @@ SEMGREP_ONLINE_RULES = "p/default"
 SEMGREP_OFFLINE_RULES = "/cache/semgrep/default.yaml"
 TRIVY_OFFLINE_FLAGS = "--skip-db-update --skip-java-db-update --offline-scan"
 
+# Local drop-in rules dir (mounted into the semgrep container at /semgrep-rules).
+SEMGREP_RULES_DIR = "semgrep-rules"
+
+# Stack auto-detect: file extension / name -> Semgrep registry pack.
+_EXT_PACKS = {
+    ".py": "p/python", ".js": "p/javascript", ".jsx": "p/javascript",
+    ".ts": "p/typescript", ".tsx": "p/typescript", ".go": "p/golang",
+    ".java": "p/java", ".rb": "p/ruby", ".php": "p/php", ".cs": "p/csharp",
+    ".kt": "p/kotlin", ".scala": "p/scala", ".rs": "p/rust", ".tf": "p/terraform",
+}
+_NAME_PACKS = {"dockerfile": "p/dockerfile"}
+_SKIP_DIRS = {".git", "node_modules", "vendor", "dist", "build", ".venv",
+              "venv", "__pycache__", ".idea", ".gradle", "target"}
+
+
+def _autodetect_packs() -> list[str]:
+    """Detect the repo's stack and map it to Semgrep registry packs."""
+    target = os.environ.get("SCAN_TARGET", "")
+    if not target or not Path(target).is_dir():
+        return []
+    packs: list[str] = []
+    seen = set()
+    scanned = 0
+    for root, dirs, files in os.walk(target):
+        dirs[:] = [d for d in dirs if d not in _SKIP_DIRS]
+        for fn in files:
+            scanned += 1
+            pack = _NAME_PACKS.get(fn.lower()) or _EXT_PACKS.get(Path(fn).suffix.lower())
+            if pack and pack not in seen:
+                seen.add(pack)
+                packs.append(pack)
+        if scanned > 20000 or len(seen) == len(set(_EXT_PACKS.values()) | set(_NAME_PACKS.values())):
+            break
+    return packs
+
+
+def _semgrep_configs(scanners: dict, offline: bool) -> str:
+    """Build the `--config ...` argument string for semgrep from scan-config."""
+    default = SEMGREP_OFFLINE_RULES if offline else SEMGREP_ONLINE_RULES
+    rules = (scanners.get("semgrep") or {}).get("rules", None)
+
+    configs: list[str] = []
+    if rules is None:
+        configs.append(default)                 # default behaviour
+    else:
+        for r in rules:
+            r = str(r).strip()
+            if r == "default":
+                configs.append(default)
+            elif r == "auto":
+                configs.extend(_autodetect_packs() if not offline else [default])
+            elif r:
+                configs.append(r)               # registry ref or container path
+
+    # Local drop-in rules, if any rule files (*.yml/*.yaml) are present.
+    rules_dir = ROOT / SEMGREP_RULES_DIR
+    if rules_dir.is_dir() and (any(rules_dir.rglob("*.yml")) or any(rules_dir.rglob("*.yaml"))):
+        configs.append("/semgrep-rules")
+
+    # De-duplicate (preserve order); never end up with nothing.
+    seen, ordered = set(), []
+    for c in configs:
+        if c and c not in seen:
+            seen.add(c)
+            ordered.append(c)
+    if not ordered:
+        ordered.append(default)
+
+    return " ".join(f"--config {c}" for c in ordered)
+
 
 def _image_ref(repo: str, ver: str) -> str:
     """Build an image ref from a `version` that may be a tag OR a digest.
@@ -112,7 +182,7 @@ def main() -> int:
         env[f"{prefix}_IMAGE"] = pins.get(tagref, tagref)   # lock digest if pinned
 
     env.update({
-        "SEMGREP_RULES": SEMGREP_OFFLINE_RULES if offline else SEMGREP_ONLINE_RULES,
+        "SEMGREP_CONFIGS": _semgrep_configs(scanners, offline),
         "TRIVY_DB_FLAGS": TRIVY_OFFLINE_FLAGS if offline else "",
         "GRYPE_DB_AUTO_UPDATE": "false" if offline else "true",
         # Empty => gitleaks scans git history; default skips it (working tree only).

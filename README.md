@@ -78,6 +78,29 @@ collector won't expect its report. Upgrade a tool by changing its `version`.
 Set `secrets_history: true` to have Gitleaks scan the full **git history**
 (needs a `.git` in the repo), not just the working tree.
 
+## Custom & auto Semgrep rules
+
+By default Semgrep runs the curated `p/default` pack. Point it at your own rules
+or let it pick rules for the repo's stack via `scanners.semgrep.rules`:
+
+```yaml
+scanners:
+  semgrep:
+    enabled: true
+    version: "1.97.0"
+    rules:
+      - default                      # the curated p/default pack
+      - auto                         # detect the stack -> matching registry packs
+      - "p/python"                   # any Semgrep registry ref
+      - "/semgrep-rules/custom.yml"  # a file from ./semgrep-rules
+```
+
+- **`auto`** scans the repo for languages/manifests (`.py`, `.go`, `.tf`,
+  `Dockerfile`, …) and adds the matching `p/<lang>` packs (online only; offline
+  falls back to the cached default pack).
+- Any `*.yml`/`*.yaml` you drop into **`./semgrep-rules/`** is mounted at
+  `/semgrep-rules` and auto-included — no config needed.
+
 ## Offline / air-gapped
 
 Run once **with** network to snapshot DBs and rulesets into `./cache/`:

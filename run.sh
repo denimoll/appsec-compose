@@ -95,7 +95,7 @@ export SCAN_TARGET
 eval "$(python3 scripts/render-env.py)"
 [[ -n "$FAIL_ON_OVERRIDE" ]] && export FAIL_ON="$FAIL_ON_OVERRIDE"
 
-mkdir -p reports/native cache/semgrep cache/trivy cache/grype
+mkdir -p reports/native cache/semgrep cache/trivy cache/grype semgrep-rules
 # Ensure the baseline file exists so Docker can bind-mount it (empty = no baseline).
 [[ -f appsec-baseline.json ]] || echo '{"fingerprints": []}' > appsec-baseline.json
 

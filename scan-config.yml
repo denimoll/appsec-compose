@@ -14,6 +14,12 @@ scanners:
   semgrep:                 # source code vulnerabilities
     enabled: true
     version: "1.97.0"
+    # Optional rule sources (each becomes a `--config`). Omit for the default
+    # pack. Entries: "default" (curated pack), "auto" (detect the repo's stack
+    # and pull matching registry packs), a registry ref ("p/python", "r/..."),
+    # or a path under ./semgrep-rules (mounted at /semgrep-rules). Any *.yml in
+    # ./semgrep-rules is also auto-included. Example:
+    # rules: [default, auto, "p/python", "/semgrep-rules/custom.yml"]
 
   # -- SCA  (dependency vulnerabilities) — Trivy / Grype / OSV ---------
   trivy:                   # also covers IaC (config) + SBOM (see below)
