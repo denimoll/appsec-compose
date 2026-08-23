@@ -8,7 +8,7 @@
 # the dind daemon cannot see $CI_PROJECT_DIR.
 appsec-compose:
   stage: test
-  image: docker:27
+  image: docker:29
   variables:
     DOCKER_HOST: unix:///var/run/docker.sock
   before_script:

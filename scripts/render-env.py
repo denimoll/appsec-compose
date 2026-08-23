@@ -16,6 +16,7 @@ form (consumed by pin.sh).
 from __future__ import annotations
 
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -30,15 +31,15 @@ LOCK = ROOT / "image-digests.lock"
 
 # tool -> (docker repo, default version, env-var prefix)
 TOOLS = {
-    "semgrep": ("semgrep/semgrep", "1.97.0", "SEMGREP"),
-    "trivy": ("aquasec/trivy", "0.58.0", "TRIVY"),
-    "gitleaks": ("zricethezav/gitleaks", "v8.21.2", "GITLEAKS"),
-    "checkov": ("bridgecrew/checkov", "3.2.334", "CHECKOV"),
-    "grype": ("anchore/grype", "v0.85.0", "GRYPE"),
-    "trufflehog": ("trufflesecurity/trufflehog", "3.88.0", "TRUFFLEHOG"),
-    "syft": ("anchore/syft", "v1.18.0", "SYFT"),
-    "hadolint": ("hadolint/hadolint", "2.12.0-alpine", "HADOLINT"),
-    "osv": ("ghcr.io/google/osv-scanner", "v2.4.0", "OSV"),
+    "semgrep": ("semgrep/semgrep", "1.174.0", "SEMGREP"),
+    "trivy": ("aquasec/trivy", "0.74.0", "TRIVY"),
+    "gitleaks": ("zricethezav/gitleaks", "v8.30.1", "GITLEAKS"),
+    "checkov": ("bridgecrew/checkov", "3.3.13", "CHECKOV"),
+    "grype": ("anchore/grype", "v0.117.0", "GRYPE"),
+    "trufflehog": ("trufflesecurity/trufflehog", "3.97.0", "TRUFFLEHOG"),
+    "syft": ("anchore/syft", "v1.51.0", "SYFT"),
+    "hadolint": ("hadolint/hadolint", "v2.15.1-alpine", "HADOLINT"),
+    "osv": ("ghcr.io/google/osv-scanner", "v2.5.1", "OSV"),
 }
 
 # Registry pack fetched offline by preload.sh; used as a local file when offline.
@@ -59,6 +60,89 @@ _EXT_PACKS = {
 _NAME_PACKS = {"dockerfile": "p/dockerfile"}
 _SKIP_DIRS = {".git", "node_modules", "vendor", "dist", "build", ".venv",
               "venv", "__pycache__", ".idea", ".gradle", "target"}
+
+# Directories excluded from every engine unless scan-config.yml overrides
+# `exclude:`. These are build output and dependency trees: scanning them buries
+# real findings in vendored noise and dominates the runtime.
+DEFAULT_EXCLUDES = [
+    ".git", "node_modules", "vendor", "dist", "build", "target",
+    ".venv", "venv", "__pycache__", ".gradle", ".tox", ".mypy_cache",
+]
+
+# Generated per-engine exclude configs (gitleaks TOML, trufflehog regex list)
+# live here and are mounted into the containers at /excludes.
+EXCLUDES_DIR = "excludes"
+
+
+def _path_regex(pattern: str) -> str:
+    """A directory name / simple glob as a path regex (checkov, gitleaks, trufflehog)."""
+    body = "".join(".*" if ch == "*" else re.escape(ch) for ch in pattern)
+    return f"(^|/){body}(/|$)"
+
+
+def _exclude_flags(patterns: list[str]) -> dict[str, str]:
+    """Translate exclude entries into each engine's own exclusion syntax.
+
+    An entry is a directory name ("node_modules") or a path glob ("docs/**").
+    Engines that take no exclusion flag (gitleaks, trufflehog) get a generated
+    config file instead — see _write_exclude_files.
+    """
+    semgrep, trivy, checkov, anchore, osv, hadolint = [], [], [], [], [], []
+    # Trivy separates directory and file exclusions; a glob may name either, so
+    # a glob entry goes to both lists.
+    for raw in patterns:
+        pat = str(raw).strip().strip("/")
+        if not pat:
+            continue
+        is_glob = any(c in pat for c in "*?[")
+        # No inner quoting: these land in .env (whose parser has no escapes) and
+        # are word-split by the container shell, which runs with `set -f` so the
+        # glob patterns reach the engine unexpanded.
+        semgrep.append(f"--exclude={pat}")
+        if is_glob:
+            trivy.extend([f"--skip-dirs={pat}", f"--skip-files={pat}"])
+        elif "/" in pat:
+            trivy.append(f"--skip-dirs={pat}")
+        else:
+            trivy.append(f"--skip-dirs=**/{pat}")
+        checkov.append(f"--skip-path={_path_regex(pat)}")
+        anchore.extend([f"./{pat}", f"./**/{pat}"] if is_glob
+                       else [f"./{pat}/**", f"./**/{pat}/**"])
+        if not is_glob:
+            osv.append(f"--experimental-exclude={pat}")
+        hadolint.extend(["-not", "-path", f"*/{pat}/*"])
+    return {
+        "SEMGREP_EXCLUDES": " ".join(semgrep),
+        "TRIVY_SKIP_DIRS": " ".join(trivy),
+        "CHECKOV_SKIP_PATHS": " ".join(checkov),
+        # grype/syft ship no shell, so their exclusions go through the env vars
+        # they read (comma-separated) rather than the command line.
+        "GRYPE_EXCLUDE": ",".join(anchore),
+        "SYFT_EXCLUDE": ",".join(anchore),
+        "OSV_EXCLUDES": " ".join(osv),
+        "HADOLINT_PRUNE": " ".join(hadolint),
+    }
+
+
+def _write_exclude_files(patterns: list[str]) -> None:
+    """Generate the exclude configs for engines that take no exclusion flag."""
+    out = ROOT / EXCLUDES_DIR
+    out.mkdir(exist_ok=True)
+    regexes = [_path_regex(str(p).strip().strip("/")) for p in patterns
+               if str(p).strip()]
+    header = "# Generated from scan-config.yml by scripts/render-env.py — do not edit.\n"
+
+    # Gitleaks: extend the bundled ruleset with a path allowlist.
+    toml = header + "[extend]\nuseDefault = true\n"
+    if regexes:
+        paths = ",\n".join("    '''" + r + "'''" for r in regexes)
+        toml += ('\n[[allowlists]]\ndescription = "appsec-compose exclude:"\n'
+                 f"paths = [\n{paths}\n]\n")
+    (out / "gitleaks.toml").write_text(toml)
+
+    # TruffleHog: newline-separated regexes of paths to skip.
+    (out / "trufflehog.txt").write_text("\n".join(regexes) + ("\n" if regexes else ""))
+
 
 
 def _autodetect_packs() -> list[str]:
@@ -146,6 +230,11 @@ def _load_lock() -> dict[str, str]:
     return pins
 
 
+def _is_pinned(env: dict[str, str], prefix: str, pins: dict[str, str]) -> bool:
+    """True when the resolved image ref is a digest (from the lock or a manual pin)."""
+    return "@sha256:" in env.get(f"{prefix}_IMAGE", "")
+
+
 def main() -> int:
     cfg = yaml.safe_load(CFG.read_text()) or {}
     scanners = cfg.get("scanners", {}) or {}
@@ -172,6 +261,18 @@ def main() -> int:
 
     enabled = [n for n, c in scanners.items() if (c or {}).get("enabled", True)]
 
+    # `exclude:` omitted -> recommended defaults; an explicit (possibly empty)
+    # list replaces them entirely.
+    raw_excludes = cfg.get("exclude", None)
+    excludes = DEFAULT_EXCLUDES if raw_excludes is None else list(raw_excludes or [])
+    _write_exclude_files(excludes)
+
+    # Gitleaks scans the working tree by default; `secrets_history` walks the
+    # full history and `secrets_history_range` narrows it to a commit range
+    # (e.g. "origin/main..HEAD" — the PR's own commits instead of everything).
+    history_range = str(cfg.get("secrets_history_range", "") or "").strip()
+    history = bool(cfg.get("secrets_history", False)) or bool(history_range)
+
     env: dict[str, str] = {}
     for tool, (repo, default_ver, prefix) in TOOLS.items():
         ver = version(tool, default_ver)
@@ -185,22 +286,54 @@ def main() -> int:
         "SEMGREP_CONFIGS": _semgrep_configs(scanners, offline),
         "TRIVY_DB_FLAGS": TRIVY_OFFLINE_FLAGS if offline else "",
         "GRYPE_DB_AUTO_UPDATE": "false" if offline else "true",
-        # Empty => gitleaks scans git history; default skips it (working tree only).
-        "GITLEAKS_GIT_FLAG": "" if cfg.get("secrets_history", False) else "--no-git",
+        # Gitleaks subcommand: `git` walks the history, `dir` the working tree.
+        "GITLEAKS_CMD": "git" if history else "dir",
+        "GITLEAKS_LOG_OPTS": f"--log-opts={history_range}" if (history and history_range) else "",
         "ASS_SBOM_CDX": "1" if sbom_on and "cyclonedx" in formats else "0",
         "ASS_SBOM_SPDX": "1" if sbom_on and "spdx" in formats else "0",
         "ASS_IMAGE": image,
         "ASS_IMAGE_TAR": tar,
         "ASS_GRYPE_TARGET": grype_target,
         "ASS_SYFT_TARGET": syft_target,
-        "FAIL_ON": str(cfg.get("fail_on", "high")),
+        # Scalar policies pass through .env; a per-category map is read by the
+        # collector straight from the mounted scan-config.yml (an FAIL_ON here
+        # would be an override and would flatten the map).
+        "FAIL_ON": "" if isinstance(cfg.get("fail_on"), dict) else str(cfg.get("fail_on", "high")),
         # All tag refs (for ./pin.sh to resolve to digests).
         "ASS_TAGREFS": " ".join(env[f"{p}_TAGREF"] for _, _, p in TOOLS.values()),
     })
+    env.update(_exclude_flags(excludes))
+    # The collector prunes its manifest walk with the same list.
+    env["ASS_EXCLUDES"] = " ".join(str(e).strip().strip("/") for e in excludes
+                                   if str(e).strip())
+
+    # Single-quote every value: several of them contain spaces (SEMGREP_CONFIGS,
+    # TRIVY_DB_FLAGS, ASS_TAGREFS) and pin.sh/preload.sh `.` this file as shell.
+    # Compose's own .env parser strips the surrounding quotes.
+    def q(v: str) -> str:
+        v = str(v)
+        if "'" in v:      # the .env parser has no escapes; keep values quote-free
+            raise ValueError(f"config value must not contain a single quote: {v!r}")
+        return f"'{v}'"
+
+    # Supply chain: a lock that doesn't cover every enabled scanner means those
+    # run from a mutable tag. Warn always; fail when `require_pinned` is set.
+    unpinned = [tool for tool in enabled
+                if tool in TOOLS and not _is_pinned(env, TOOLS[tool][2], pins)]
+    if pins and unpinned:
+        print(f"warning: not pinned by image-digests.lock: {', '.join(sorted(unpinned))} "
+              f"(re-run ./pin.sh)", file=sys.stderr)
+    require_pinned = (os.environ.get("ASS_REQUIRE_PINNED", "").strip() == "1"
+                      or bool(cfg.get("require_pinned", False)))
+    if require_pinned and unpinned:
+        print(f"ERROR: require_pinned is set but these scanners have no digest in "
+              f"image-digests.lock: {', '.join(sorted(unpinned))}. Run ./pin.sh.",
+              file=sys.stderr)
+        return 2
 
     (ROOT / ".env").write_text(
         "# Generated from scan-config.yml by scripts/render-env.py — do not edit.\n"
-        + "".join(f"{k}={v}\n" for k, v in env.items())
+        + "".join(f"{k}={q(v)}\n" for k, v in env.items())
     )
 
     # Shell-consumable summary for run.sh.

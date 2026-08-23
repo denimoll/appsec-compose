@@ -20,7 +20,7 @@ _MD_TEMPLATE = """# appsec-compose report
 
 _Generated: {{ generated }} UTC_
 
-**Policy:** fail_on = `{{ policy.threshold }}` -> **{{ verdict }}**
+**Policy:** fail_on = `{{ policy.label }}` -> **{{ verdict }}**
 ({{ policy.breaching }} finding(s) at/above threshold)
 {% if stats.removed %}
 _Deduplicated: {{ total }} unique of {{ stats.raw }} raw findings ({{ stats.removed }} merged)._
@@ -30,6 +30,14 @@ _Suppressed by ignore rules: {{ suppressed_count }} (excluded from the gate)._
 {% endif %}
 {% if delta %}
 _Baseline: **{{ delta.new | length }} new**, {{ delta.known | length }} known, {{ delta.fixed }} fixed (gate applies to new only)._
+{% endif %}
+{% if coverage and coverage.warnings %}
+## ⚠ SCA coverage
+
+{% for w in coverage.warnings %}- {{ w.message }}
+  **{{ w.advice }}**
+{% endfor %}
+
 {% endif %}
 ## Totals by severity
 
@@ -116,6 +124,10 @@ _HTML_TEMPLATE = """<!doctype html>
  .row .t i{display:block;height:100%;background:var(--accent);opacity:.85}
  .row .v{flex:0 0 34px;text-align:right;color:var(--muted);font-variant-numeric:tabular-nums}
  .chips{display:flex;flex-wrap:wrap;gap:8px}
+ .alert{background:var(--card);border:1px solid var(--med);border-left:4px solid var(--med);
+   border-radius:10px;padding:14px 16px;margin:22px 0 0}
+ .alert-t{font-weight:700;color:var(--med);margin-bottom:6px}
+ .alert-a{margin-top:6px;color:var(--muted)}
  .chip{font-size:12px;padding:4px 10px;border-radius:999px;border:1px solid var(--line);background:var(--card)}
  .chip.ok{border-color:#bce3c8;color:var(--pass)} .chip.warn{border-color:#f3d2a6;color:#9a6700}
  .chip.err{border-color:#f0bcc2;color:var(--fail)}
@@ -147,7 +159,7 @@ _HTML_TEMPLATE = """<!doctype html>
 </style></head><body>
 <header><div class="wrap">
   <div class="brand"><span class="dot"></span>appsec-compose</div>
-  <div class="sub">Generated {{ generated }} UTC &middot; policy fail_on = {{ policy.threshold }}{% if stats.removed %} &middot; {{ total }} unique of {{ stats.raw }} ({{ stats.removed }} merged){% endif %}{% if suppressed_count %} &middot; {{ suppressed_count }} suppressed{% endif %}{% if delta %} &middot; {{ delta.new | length }} new / {{ delta.known | length }} known / {{ delta.fixed }} fixed{% endif %}</div>
+  <div class="sub">Generated {{ generated }} UTC &middot; policy fail_on = {{ policy.label }}{% if stats.removed %} &middot; {{ total }} unique of {{ stats.raw }} ({{ stats.removed }} merged){% endif %}{% if suppressed_count %} &middot; {{ suppressed_count }} suppressed{% endif %}{% if delta %} &middot; {{ delta.new | length }} new / {{ delta.known | length }} known / {{ delta.fixed }} fixed{% endif %}</div>
   <div class="pill {{ 'fail' if policy.exit_code else 'pass' }}">
     <span class="big">{{ '✗' if policy.exit_code else '✓' }} {{ verdict }}</span>
     &middot; {{ policy.breaching }} at/above threshold
@@ -156,6 +168,15 @@ _HTML_TEMPLATE = """<!doctype html>
 
 <div class="wrap">
 
+{% if coverage and coverage.warnings %}
+{% for w in coverage.warnings %}
+<div class="alert">
+  <div class="alert-t">&#9888; SCA coverage gap</div>
+  <div>{{ w.message }}</div>
+  <div class="alert-a">{{ w.advice }}</div>
+</div>
+{% endfor %}
+{% endif %}
 <h2>Severity overview</h2>
 <div class="cards">
   <div class="card total"><div class="n">{{ total }}</div><div class="l">Total</div></div>
@@ -250,7 +271,8 @@ def _sort_findings(findings: list[Finding]) -> list[Finding]:
 
 
 def _context(result: ScanResult, policy: PolicyResult, findings: list[Finding],
-             stats: DedupStats, suppressed_count: int, delta) -> dict:
+             stats: DedupStats, suppressed_count: int, delta,
+             coverage=None) -> dict:
     total = sum(policy.severity_counts.values())
     top = _sort_findings(findings)[:_TOP_N]
     # Filter chips are derived from the rows actually shown, so a filter can
@@ -263,6 +285,7 @@ def _context(result: ScanResult, policy: PolicyResult, findings: list[Finding],
         "stats": stats,
         "suppressed_count": suppressed_count,
         "delta": delta,
+        "coverage": coverage,
         "verdict": "FAIL" if policy.exit_code else "PASS",
         "sev_order": _DISPLAY_ORDER,
         "total": total,
@@ -280,9 +303,10 @@ def _context(result: ScanResult, policy: PolicyResult, findings: list[Finding],
 
 def render(result: ScanResult, policy: PolicyResult, findings: list[Finding],
            stats: DedupStats, out_dir: str = "/reports",
-           suppressed_count: int = 0, delta=None) -> None:
+           suppressed_count: int = 0, delta=None, coverage=None) -> None:
     env = Environment(autoescape=False, trim_blocks=True, lstrip_blocks=True)
-    ctx = _context(result, policy, findings, stats, suppressed_count, delta)
+    ctx = _context(result, policy, findings, stats, suppressed_count, delta,
+                   coverage)
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
     (out / "summary.md").write_text(env.from_string(_MD_TEMPLATE).render(**ctx))

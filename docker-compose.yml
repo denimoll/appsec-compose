@@ -21,17 +21,19 @@ x-code-mount: &code-mount
 services:
   # ---- SAST -------------------------------------------------------------
   semgrep:
-    image: ${SEMGREP_IMAGE:-semgrep/semgrep:1.97.0}
+    image: ${SEMGREP_IMAGE:-semgrep/semgrep:1.174.0}
     entrypoint: ["/bin/sh", "-c"]
     # SEMGREP_CONFIGS = one or more `--config <ref>` built by render-env from
     # scan-config.yml (default pack, custom registry refs, `auto` stack-detect,
     # and the local ./semgrep-rules drop-in dir mounted at /semgrep-rules).
     command:
       - >-
-        semgrep scan $$SEMGREP_CONFIGS --metrics off
+        set -f;
+        semgrep scan $$SEMGREP_CONFIGS $$SEMGREP_EXCLUDES --metrics off
         --sarif --output /reports/native/semgrep.sarif /code || true
     environment:
       SEMGREP_CONFIGS: ${SEMGREP_CONFIGS:---config p/default}
+      SEMGREP_EXCLUDES: ${SEMGREP_EXCLUDES:-}
     volumes:
       - *code-mount
       - ./reports:/reports
@@ -42,19 +44,21 @@ services:
   # Scans the repo filesystem, or a container image when ASS_IMAGE is set
   # (./run.sh --image <ref>). SBOM formats are controlled by ASS_SBOM_CDX/SPDX.
   trivy:
-    image: ${TRIVY_IMAGE:-aquasec/trivy:0.58.0}
+    image: ${TRIVY_IMAGE:-aquasec/trivy:0.74.0}
     entrypoint: ["/bin/sh", "-c"]
     command:
       - |
-        if [ -n "$$ASS_IMAGE_TAR" ]; then SRC=image; SRCARG="--input $$ASS_IMAGE_TAR";
-        elif [ -n "$$ASS_IMAGE" ]; then SRC=image; SRCARG="$$ASS_IMAGE";
-        else SRC=fs; SRCARG=/code; fi
-        trivy $$SRC --quiet $$TRIVY_DB_FLAGS --scanners vuln,secret --format sarif --output /reports/native/trivy-fs.sarif $$SRCARG
-        [ "$$SRC" = fs ] && trivy config --quiet --format sarif --output /reports/native/trivy-config.sarif /code || true
-        [ "$$ASS_SBOM_CDX" = "1" ] && trivy $$SRC --quiet $$TRIVY_DB_FLAGS --format cyclonedx --output /reports/sbom.trivy.cdx.json $$SRCARG || true
-        [ "$$ASS_SBOM_SPDX" = "1" ] && trivy $$SRC --quiet $$TRIVY_DB_FLAGS --format spdx-json --output /reports/sbom.trivy.spdx.json $$SRCARG || true
+        set -f
+        if [ -n "$$ASS_IMAGE_TAR" ]; then SRC=image; SRCARG="--input $$ASS_IMAGE_TAR"; SKIP=;
+        elif [ -n "$$ASS_IMAGE" ]; then SRC=image; SRCARG="$$ASS_IMAGE"; SKIP=;
+        else SRC=fs; SRCARG=/code; SKIP=$$TRIVY_SKIP_DIRS; fi
+        trivy $$SRC --quiet $$TRIVY_DB_FLAGS $$SKIP --scanners vuln,secret --format sarif --output /reports/native/trivy-fs.sarif $$SRCARG
+        [ "$$SRC" = fs ] && trivy config --quiet $$SKIP --format sarif --output /reports/native/trivy-config.sarif /code || true
+        [ "$$ASS_SBOM_CDX" = "1" ] && trivy $$SRC --quiet $$TRIVY_DB_FLAGS $$SKIP --format cyclonedx --output /reports/sbom.trivy.cdx.json $$SRCARG || true
+        [ "$$ASS_SBOM_SPDX" = "1" ] && trivy $$SRC --quiet $$TRIVY_DB_FLAGS $$SKIP --format spdx-json --output /reports/sbom.trivy.spdx.json $$SRCARG || true
     environment:
       TRIVY_DB_FLAGS: ${TRIVY_DB_FLAGS:-}
+      TRIVY_SKIP_DIRS: ${TRIVY_SKIP_DIRS:-}
       ASS_IMAGE: ${ASS_IMAGE:-}
       ASS_IMAGE_TAR: ${ASS_IMAGE_TAR:-}
       ASS_SBOM_CDX: ${ASS_SBOM_CDX:-1}
@@ -69,39 +73,45 @@ services:
 
   # ---- Secrets ----------------------------------------------------------
   gitleaks:
-    image: ${GITLEAKS_IMAGE:-zricethezav/gitleaks:v8.21.2}
+    image: ${GITLEAKS_IMAGE:-zricethezav/gitleaks:v8.30.1}
     entrypoint: ["/bin/sh", "-c"]
-    # GITLEAKS_GIT_FLAG = "--no-git" (working tree only, default) or "" to scan
+    # GITLEAKS_CMD = "dir" (working tree only, default) or "git" to scan the
     # git history (needs a .git in the repo). --exit-code 0 keeps it green.
     command:
       - >-
-        gitleaks detect --source=/code $$GITLEAKS_GIT_FLAG
+        set -f;
+        gitleaks $$GITLEAKS_CMD /code --config=/excludes/gitleaks.toml $$GITLEAKS_LOG_OPTS
         --report-format=sarif --report-path=/reports/native/gitleaks.sarif --exit-code=0
     environment:
-      GITLEAKS_GIT_FLAG: ${GITLEAKS_GIT_FLAG---no-git}
+      GITLEAKS_CMD: ${GITLEAKS_CMD:-dir}
+      GITLEAKS_LOG_OPTS: ${GITLEAKS_LOG_OPTS:-}
     volumes:
       - *code-mount
       - ./reports:/reports
+      - ./excludes:/excludes:ro
 
   # ---- IaC (deeper policy coverage than Trivy config) -------------------
   checkov:
-    image: ${CHECKOV_IMAGE:-bridgecrew/checkov:3.2.334}
+    image: ${CHECKOV_IMAGE:-bridgecrew/checkov:3.3.13}
     entrypoint: ["/bin/sh", "-c"]
     # checkov prints an ASCII banner to stdout, so we can't redirect stdout to
     # the report. Write to a dir (clean `results_sarif.sarif`) and rename it.
     command:
       - >-
-        checkov -d /code --soft-fail --compact -o sarif
+        set -f;
+        checkov -d /code --soft-fail --compact $$CHECKOV_SKIP_PATHS -o sarif
         --output-file-path /reports/native/_checkov >/dev/null 2>&1 || true ;
         mv /reports/native/_checkov/results_sarif.sarif /reports/native/checkov.sarif 2>/dev/null || true ;
         rm -rf /reports/native/_checkov
+    environment:
+      CHECKOV_SKIP_PATHS: ${CHECKOV_SKIP_PATHS:-}
     volumes:
       - *code-mount
       - ./reports:/reports
 
   # ---- SCA (alternative) -----------------------------------------------
   grype:
-    image: ${GRYPE_IMAGE:-anchore/grype:v0.85.0}
+    image: ${GRYPE_IMAGE:-anchore/grype:v0.117.0}
     # entrypoint is `grype`; default exit code is 0. SARIF is the native ASPM
     # artifact; the JSON carries relatedVulnerabilities (GHSA<->CVE aliases) and
     # package info that the collector uses for cross-tool SCA de-duplication.
@@ -115,6 +125,7 @@ services:
       - "-q"
     environment:
       GRYPE_DB_CACHE_DIR: /cache/grype
+      GRYPE_EXCLUDE: ${GRYPE_EXCLUDE:-}
       GRYPE_DB_AUTO_UPDATE: ${GRYPE_DB_AUTO_UPDATE:-true}
       DOCKER_CONFIG: /dockercfg
     volumes:
@@ -126,22 +137,23 @@ services:
 
   # ---- Secrets (alternative) -------------------------------------------
   trufflehog:
-    image: ${TRUFFLEHOG_IMAGE:-trufflesecurity/trufflehog:3.88.0}
+    image: ${TRUFFLEHOG_IMAGE:-trufflesecurity/trufflehog:3.97.0}
     entrypoint: ["/bin/sh", "-c"]
     # TruffleHog has no SARIF output; it emits JSON lines. We keep the raw JSON
     # as the native report and the collector generates trufflehog.sarif from it.
     command:
       - >-
-        trufflehog filesystem /code --json --no-update
+        trufflehog filesystem /code --json --no-update -x /excludes/trufflehog.txt
         > /reports/native/trufflehog.json 2>/dev/null || true
     volumes:
       - *code-mount
       - ./reports:/reports
+      - ./excludes:/excludes:ro
 
   # ---- SBOM (alternative generator) ------------------------------------
   # Emits both CycloneDX and SPDX. Target is dir:/code or a container image.
   syft:
-    image: ${SYFT_IMAGE:-anchore/syft:v1.18.0}
+    image: ${SYFT_IMAGE:-anchore/syft:v1.51.0}
     command:
       - "scan"
       - "${ASS_SYFT_TARGET:-dir:/code}"
@@ -152,6 +164,7 @@ services:
       - "-q"
     environment:
       DOCKER_CONFIG: /dockercfg
+      SYFT_EXCLUDE: ${SYFT_EXCLUDE:-}
     volumes:
       - *code-mount
       - ./reports:/reports
@@ -160,28 +173,41 @@ services:
 
   # ---- IaC (Dockerfile lint) -------------------------------------------
   hadolint:
-    image: ${HADOLINT_IMAGE:-hadolint/hadolint:2.12.0-alpine}
+    image: ${HADOLINT_IMAGE:-hadolint/hadolint:v2.15.1-alpine}
     entrypoint: ["/bin/sh", "-c"]
     # Lint every Dockerfile in the repo; --no-fail keeps the container green.
     # Empty SARIF when none are found.
     command:
       - >-
-        files=$$(find /code -type f \( -iname 'Dockerfile' -o -iname 'Dockerfile.*' -o -iname '*.Dockerfile' \) 2>/dev/null);
+        set -f;
+        files=$$(find /code -type f \( -iname 'Dockerfile' -o -iname 'Dockerfile.*' -o -iname '*.Dockerfile' \) $$HADOLINT_PRUNE 2>/dev/null);
         if [ -n "$$files" ]; then hadolint --no-fail --format sarif $$files > /reports/native/hadolint.sarif 2>/dev/null;
         else printf '{"version":"2.1.0","runs":[{"tool":{"driver":{"name":"Hadolint"}},"results":[]}]}' > /reports/native/hadolint.sarif; fi
+    environment:
+      HADOLINT_PRUNE: ${HADOLINT_PRUNE:-}
     volumes:
       - *code-mount
       - ./reports:/reports
 
   # ---- SCA (alternative, OSV database) ---------------------------------
   osv:
-    image: ${OSV_IMAGE:-ghcr.io/google/osv-scanner:v2.4.0}
+    image: ${OSV_IMAGE:-ghcr.io/google/osv-scanner:v2.5.1}
     entrypoint: ["/bin/sh", "-c"]
     # OSV ruleId is the CVE, so findings de-duplicate against Trivy/Grype.
     # Needs network (queries the OSV database); not for offline mode.
+    # A repo with no dependency manifests makes osv-scanner exit without writing
+    # anything, so fall back to an empty SARIF: "nothing to scan" is a clean
+    # result, not a missing report.
     command:
       - >-
-        /osv-scanner --format sarif --output /reports/native/osv.sarif --recursive /code || true
+        set -f;
+        /osv-scanner scan source --recursive $$OSV_EXCLUDES --format sarif
+        --output-file /reports/native/osv.sarif /code || true;
+        [ -s /reports/native/osv.sarif ] ||
+        printf '{"version":"2.1.0","runs":[{"tool":{"driver":{"name":"osv-scanner"}},"results":[]}]}'
+        > /reports/native/osv.sarif
+    environment:
+      OSV_EXCLUDES: ${OSV_EXCLUDES:-}
     volumes:
       - *code-mount
       - ./reports:/reports
@@ -191,6 +217,9 @@ services:
   # depends_on is kept so a raw `docker compose run collector` still works.
   collector:
     build: ./orchestrator
+    # Non-root; run.sh supplies the host uid/gid so the bind-mounted reports/
+    # and baseline file stay writable.
+    user: "${ASS_UID:-65532}:${ASS_GID:-65532}"
     depends_on:
       semgrep:  { condition: service_completed_successfully }
       trivy:    { condition: service_completed_successfully }
@@ -202,7 +231,12 @@ services:
       ASS_IMAGE: ${ASS_IMAGE:-}
       ASS_IMAGE_TAR: ${ASS_IMAGE_TAR:-}
       ASS_ENABLED: ${ASS_ENABLED:-}
+      ASS_STRICT: ${ASS_STRICT:-}
+      ASS_EXCLUDES: ${ASS_EXCLUDES:-}
     volumes:
+      # Read-only code mount: the collector compares the manifests the repo
+      # declares against what the SCA engines actually resolved.
+      - *code-mount
       - ./reports:/reports
       - ./scan-config.yml:/app/scan-config.yml:ro
       - ./appsec-baseline.json:/app/appsec-baseline.json

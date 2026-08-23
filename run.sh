@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # appsec-compose — one-command OSS AppSec scan.
 #
-#   ./run.sh <path-to-repo>  [--fail-on L] [--update-baseline]
+#   ./run.sh <path-to-repo>  [--fail-on L] [--strict] [--update-baseline]
 #   ./run.sh --image <ref>   [--fail-on L]        # scan a container image
 #
 # Reads scan-config.yml, runs the enabled scanners over the target (repo or
@@ -10,7 +10,7 @@
 set -euo pipefail
 
 usage() {
-  echo "Usage: $0 <path-to-repo> [--fail-on L] [--update-baseline]" >&2
+  echo "Usage: $0 <path-to-repo> [--fail-on L] [--strict] [--require-pinned] [--update-baseline]" >&2
   echo "       $0 --image <ref> [--registry-user U --registry-pass P] [--fail-on L]" >&2
   echo "       $0 --build <context> [--dockerfile <path>] [--fail-on L]" >&2
   exit 2
@@ -29,6 +29,8 @@ while [[ $# -gt 0 ]]; do
     --registry-user) REG_USER="${2:-}"; shift 2 ;;
     --registry-pass) REG_PASS="${2:-}"; shift 2 ;;
     --fail-on) FAIL_ON_OVERRIDE="${2:-}"; shift 2 ;;
+    --strict) export ASS_STRICT=1; shift ;;
+    --require-pinned) export ASS_REQUIRE_PINNED=1; shift ;;
     --update-baseline) export ASS_UPDATE_BASELINE=1; shift ;;
     -h|--help) usage ;;
     -*) echo "Unknown argument: $1" >&2; usage ;;
@@ -40,7 +42,12 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 # Empty dir for the (unused) /code mount in image mode; in-project so Docker can
 # always bind-mount it. .img-archive holds a saved image tar in build mode.
-mkdir -p .img-empty .img-archive
+mkdir -p .img-empty .img-archive excludes
+
+# The collector runs non-root; give it the host identity so it can write into
+# the bind-mounted reports/ and appsec-baseline.json.
+ASS_UID="$(id -u)"; ASS_GID="$(id -g)"
+export ASS_UID ASS_GID
 
 # Derive the registry host from an image ref (for the docker auth config key).
 registry_of() {
@@ -92,10 +99,19 @@ export SCAN_TARGET
 
 # Render scan-config.yml -> .env (versions + flags) and read the enabled list.
 # render-env reads ASS_IMAGE to pick filesystem vs image targets.
-eval "$(python3 scripts/render-env.py)"
+# Command substitution hides a non-zero exit, so capture first and propagate:
+# render-env fails deliberately (e.g. require_pinned with an incomplete lock).
+render_out="$(python3 scripts/render-env.py)" || exit $?
+eval "$render_out"
 [[ -n "$FAIL_ON_OVERRIDE" ]] && export FAIL_ON="$FAIL_ON_OVERRIDE"
 
-mkdir -p reports/native cache/semgrep cache/trivy cache/grype semgrep-rules
+mkdir -p reports/native cache/semgrep cache/trivy cache/grype semgrep-rules excludes
+
+# Clear last run's native reports. A scanner that is disabled (or that now
+# fails) would otherwise leave a stale SARIF behind, which CI's hashFiles()
+# guards would happily upload as if it were current.
+rm -f reports/native/*.sarif reports/native/*.json
+rm -f reports/sbom.*.json
 # Ensure the baseline file exists so Docker can bind-mount it (empty = no baseline).
 [[ -f appsec-baseline.json ]] || echo '{"fingerprints": []}' > appsec-baseline.json
 
@@ -121,6 +137,7 @@ echo "Target   : $TARGET_LABEL"
 echo "Scanners : $ASS_ENABLED"
 echo "Mode     : $([[ "$ASS_OFFLINE" == "1" ]] && echo offline || echo online)"
 [[ -n "${FAIL_ON_OVERRIDE}" ]] && echo "fail_on  : $FAIL_ON_OVERRIDE (override)"
+[[ "${ASS_STRICT:-}" == "1" ]] && echo "strict   : a missing scanner report fails the run"
 [[ "${ASS_UPDATE_BASELINE:-}" == "1" ]] && echo "baseline : updating snapshot"
 
 docker compose down --remove-orphans >/dev/null 2>&1 || true

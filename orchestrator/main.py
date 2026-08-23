@@ -12,6 +12,7 @@ import sys
 from pathlib import Path
 
 import baseline as bl
+import coverage as cov
 from config import load_config
 from converters import trufflehog_json_to_sarif
 from dedup import merge
@@ -22,6 +23,7 @@ from suppress import apply as apply_ignore
 
 REPORTS_DIR = "/reports"
 NATIVE_DIR = f"{REPORTS_DIR}/native"
+CODE_DIR = "/code"
 BASELINE_PATH = "/app/appsec-baseline.json"
 
 
@@ -51,6 +53,29 @@ def main() -> int:
               f"Check the image reference and registry credentials.", file=sys.stderr)
         return 2
 
+    # strict: a scanner that was expected to report but didn't (crashed, OOM,
+    # wrote unparseable output) must not pass as "0 findings".
+    if cfg.strict and (result.reports_missing or result.reports_errored):
+        if result.reports_missing:
+            print(f"ERROR: strict mode — no report from: "
+                  f"{', '.join(sorted(result.reports_missing))}", file=sys.stderr)
+        if result.reports_errored:
+            print(f"ERROR: strict mode — unreadable report(s): "
+                  f"{'; '.join(result.reports_errored)}", file=sys.stderr)
+        return 2
+
+    # Blind-spot check: an SCA engine that resolved nothing looks exactly like a
+    # project with no vulnerable dependencies, and the gate cannot tell them apart.
+    excludes = set(os.environ.get("ASS_EXCLUDES", "").split())
+    sca_found = sum(1 for f in result.findings if f.category == "sca")
+    coverage = cov.analyse(CODE_DIR, REPORTS_DIR, enabled, excludes,
+                           image_mode=image_mode, sca_findings=sca_found)
+    if cfg.strict and coverage.warnings:
+        for warning in coverage.warnings:
+            print(f"ERROR: strict mode — {warning.message} {warning.advice}",
+                  file=sys.stderr)
+        return 2
+
     merged, stats = merge(result.findings, enabled=cfg.dedup)
     kept, suppressed = apply_ignore(merged, cfg.ignore)
 
@@ -74,6 +99,8 @@ def main() -> int:
     consolidated = {
         "policy": {
             "fail_on": policy.threshold,
+            "fail_on_by_category": policy.thresholds,
+            "strict": cfg.strict,
             "breaching": policy.breaching,
             "exit_code": policy.exit_code,
         },
@@ -90,6 +117,13 @@ def main() -> int:
             "known": len(delta.known) if delta else None,
             "fixed": delta.fixed if delta else None,
         },
+        "coverage": {
+            "manifests": coverage.manifests,
+            "ecosystems": coverage.ecosystems,
+            "sbom_components": coverage.sbom_components,
+            "warnings": [{"kind": w.kind, "message": w.message, "advice": w.advice}
+                         for w in coverage.warnings],
+        },
         "severity_counts": policy.severity_counts,
         "category_counts": policy.category_counts,
         "tool_counts": policy.tool_counts,
@@ -105,7 +139,7 @@ def main() -> int:
     Path(REPORTS_DIR, "findings.json").write_text(json.dumps(consolidated, indent=2))
 
     render(result, policy, kept, stats, REPORTS_DIR,
-           suppressed_count=len(suppressed), delta=delta)
+           suppressed_count=len(suppressed), delta=delta, coverage=coverage)
 
     # Console summary.
     total = sum(policy.severity_counts.values())
@@ -122,12 +156,15 @@ def main() -> int:
         print(f"  ! missing reports: {', '.join(result.reports_missing)}")
     if result.reports_errored:
         print(f"  ! unreadable reports: {'; '.join(result.reports_errored)}")
+    for warning in coverage.warnings:
+        print(f"  ! SCA coverage: {warning.message}")
+        print(f"    -> {warning.advice}")
     if delta is not None:
         print(f"  baseline: {len(delta.new)} new, {len(delta.known)} known, "
               f"{delta.fixed} fixed")
     verdict = "FAIL" if policy.exit_code else "PASS"
     gate_scope = "new " if delta is not None else ""
-    print(f"Policy fail_on={policy.threshold} -> {verdict} "
+    print(f"Policy fail_on={policy.label} -> {verdict} "
           f"({policy.breaching} {gate_scope}at/above threshold)")
     sboms = sorted(p.name for p in Path(REPORTS_DIR).glob("sbom.*.json"))
     sbom_note = (" | " + " | ".join(sboms)) if sboms else ""

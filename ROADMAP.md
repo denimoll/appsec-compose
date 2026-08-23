@@ -17,6 +17,16 @@
   a self-contained HTML summary (severity cards, category filters, per-finding
   details + advisory links, NEW badges in baseline mode).
 - **CI/CD** — GitHub Actions + GitLab templates; GHCR collector-image publish.
+- **Scan scope** — one `exclude:` list translated into every engine's own
+  exclusion mechanism; recommended defaults out of the box.
+- **Policy per category** — `fail_on` as a map (secrets/sca/sast/iac), plus
+  `strict` (a scanner with no readable report fails the run) and
+  `require_pinned` (refuse to run on unpinned images).
+- **Cross-tool IaC de-duplication** via a rule equivalence map.
+- **SCA coverage check** — warns when the repo declares dependency manifests
+  that no engine resolved (the silent-zero failure mode), with advice naming the
+  engine that actually fixes the gap.
+- **Tests** — pytest suite over the collector, gating the CI scan job.
 
 ## Release: 1.0.0
 
@@ -49,4 +59,4 @@ A "project" = a named **profile** (a scan-config) applied to a target entity.
 - [ ] Prebuilt collector image consumed by compose (`image:` instead of `build:`).
 - [ ] Richer **delta report** in HTML (new/fixed diff beyond the baseline NEW flag).
 - [ ] More engines as needed (e.g. KICS).
-- [ ] Bump `codeql-action` to v4 before its v3 deprecation (Dec 2026).
+- [ ] Extend the IaC equivalence map beyond Dockerfile rules (Terraform, K8s).

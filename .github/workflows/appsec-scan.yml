@@ -15,14 +15,26 @@ permissions:
   security-events: write   # required to upload SARIF to code scanning
 
 jobs:
-  scan:
+  # Collector unit tests — the scan is only as trustworthy as the code that
+  # normalizes, de-duplicates and gates the findings.
+  test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v7
+        with: { python-version: "3.14" }
+      - run: pip install -r tests/requirements.txt
+      - run: python -m pytest tests/ -q
+
+  scan:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
 
       # Cache scanner vulnerability DBs / rulesets between runs.
       - name: Cache scanner DBs
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: cache
           key: appsec-db-${{ runner.os }}-${{ hashFiles('scan-config.yml') }}
@@ -37,36 +49,44 @@ jobs:
       # run. hashFiles() guards make disabled tools' steps no-ops.
       - name: Upload Semgrep SARIF
         if: always() && hashFiles('reports/native/semgrep.sarif') != ''
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@v4
         with: { sarif_file: reports/native/semgrep.sarif, category: semgrep }
       - name: Upload Trivy (fs) SARIF
         if: always() && hashFiles('reports/native/trivy-fs.sarif') != ''
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@v4
         with: { sarif_file: reports/native/trivy-fs.sarif, category: trivy-fs }
       - name: Upload Trivy (config) SARIF
         if: always() && hashFiles('reports/native/trivy-config.sarif') != ''
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@v4
         with: { sarif_file: reports/native/trivy-config.sarif, category: trivy-config }
       - name: Upload Gitleaks SARIF
         if: always() && hashFiles('reports/native/gitleaks.sarif') != ''
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@v4
         with: { sarif_file: reports/native/gitleaks.sarif, category: gitleaks }
       - name: Upload Checkov SARIF
         if: always() && hashFiles('reports/native/checkov.sarif') != ''
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@v4
         with: { sarif_file: reports/native/checkov.sarif, category: checkov }
       - name: Upload Grype SARIF
         if: always() && hashFiles('reports/native/grype.sarif') != ''
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@v4
         with: { sarif_file: reports/native/grype.sarif, category: grype }
       - name: Upload TruffleHog SARIF
         if: always() && hashFiles('reports/native/trufflehog.sarif') != ''
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@v4
         with: { sarif_file: reports/native/trufflehog.sarif, category: trufflehog }
+      - name: Upload Hadolint SARIF
+        if: always() && hashFiles('reports/native/hadolint.sarif') != ''
+        uses: github/codeql-action/upload-sarif@v4
+        with: { sarif_file: reports/native/hadolint.sarif, category: hadolint }
+      - name: Upload OSV SARIF
+        if: always() && hashFiles('reports/native/osv.sarif') != ''
+        uses: github/codeql-action/upload-sarif@v4
+        with: { sarif_file: reports/native/osv.sarif, category: osv }
 
       - name: Upload reports artifact
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: appsec-reports
           path: reports/

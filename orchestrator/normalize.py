@@ -148,9 +148,11 @@ def _clean_path(uri: str) -> str:
     p = unquote(uri)
     if p.startswith("file://"):
         p = p[len("file://"):]
-    if p.startswith("/code/"):
-        return p[len("/code/"):]
-    if p == "/code":
+    # Most tools report "/code/x"; checkov drops the leading slash ("code/x").
+    stripped = p.lstrip("/")
+    if stripped.startswith("code/"):
+        return stripped[len("code/"):]
+    if stripped == "code":
         return ""
     return p
 
