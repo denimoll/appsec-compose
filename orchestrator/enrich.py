@@ -91,12 +91,15 @@ def _verdict_from(payload: dict) -> Verdict | None:
     details = payload.get("Details") or {}
     raw_links = details.get("Links") or {}
 
-    # `is_exploited` is not always populated even for a CVE that is in KEV
-    # (Log4Shell comes back with it null), but the catalogue entries themselves
-    # arrive under Links.KEV as a list of records — so trust either signal.
-    kev = bool(details.get("is_exploited")) or bool(raw_links.get("KEV"))
+    # CVE-PaaS >= 1.4.0 reports KEV membership explicitly (is_kev is CISA,
+    # is_vkev is VulnCheck, is_exploited is their union). Older releases left
+    # is_exploited null and carried the catalogue entries under Links.KEV
+    # instead, so accept any of those signals.
+    kev = bool(details.get("is_kev") or details.get("is_vkev")
+               or details.get("is_exploited") or raw_links.get("KEV"))
 
-    # Only genuine URLs are links; Links.KEV holds catalogue records, not a URL.
+    # Links values are URL strings from 1.4.0 on; older releases put a list of
+    # KEV records in there, which is not a link.
     links = {k: v for k, v in raw_links.items() if isinstance(v, str) and v}
 
     return Verdict(

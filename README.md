@@ -191,6 +191,11 @@ Point the collector at a [CVE-PaaS](https://github.com/denimoll/CVE-PaaS)
 instance and every SCA finding carrying a CVE gains the other half of the
 picture: CISA KEV listing, EPSS score, public PoC, Nuclei template.
 
+> Use **CVE-PaaS 1.4.0 or newer**. Before that a KEV listing never reached the
+> verdict, so a vulnerability actively exploited in the wild but without a
+> public PoC came back under-prioritised. Older releases still work — the
+> collector reads whichever signals they provide — just less accurately.
+
 ```yaml
 enrich:
   cve_paas:

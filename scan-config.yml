@@ -86,6 +86,9 @@ secrets_history_range: ""  # limit the history scan to a commit range, e.g.
 # exploiting it. CVE-PaaS (https://github.com/denimoll/CVE-PaaS) answers that —
 # CISA KEV, EPSS, public PoC, Nuclei template — and returns a priority on the
 # same scale used here. Only SCA findings carrying a CVE id are affected.
+# Use CVE-PaaS >= 1.4.0: earlier releases never let a KEV listing reach the
+# verdict, so a CVE exploited in the wild but without a public PoC came back
+# under-prioritised. Older versions still work, just less accurately.
 enrich:
   cve_paas:
     enabled: false

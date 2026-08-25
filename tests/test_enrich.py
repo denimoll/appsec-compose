@@ -4,9 +4,28 @@ import enrich
 from enrich import EnrichResult, Verdict, _verdict_from, apply, cve_ids, config_from
 from normalize import Finding
 
-# Shapes taken from a live CVE-PaaS instance, not invented: `is_exploited` comes
-# back null even for a KEV-listed CVE, and Links.KEV is a list of records.
+# Shapes taken from live CVE-PaaS instances, not invented.
+#
+# 1.4.0+ reports KEV membership explicitly and every Links value is a URL.
 LOG4SHELL = {
+    "Priority": "Critical",
+    "Details": {
+        "CVSS": 10, "EPSS": 0.99999,
+        "is_template": True, "is_poc": True,
+        "is_kev": True, "is_vkev": True, "is_exploited": True,
+        "kev": [{"added_date": "2021-12-10T00:00:00Z", "source": "cisa"}],
+        "nuclei_template_count": 75,
+        "Links": {
+            "POC": "http://packetstormsecurity.com/files/165261/",
+            "Nuclei templates": "https://github.com/search?q=CVE-2021-44228",
+            "KEV": "https://www.cisa.gov/known-exploited-vulnerabilities-catalog",
+        },
+    },
+}
+
+# Before 1.4.0 is_exploited was always null and Links.KEV held catalogue
+# records rather than a URL. Kept so an older service still gates correctly.
+LOG4SHELL_LEGACY = {
     "Priority": "Critical",
     "Details": {
         "CVSS": 10, "EPSS": 0.99999,
@@ -30,15 +49,22 @@ def sca(rule_id, severity="high", aliases=()):
                    None, package="x@1", aliases=list(aliases))
 
 
-def test_kev_is_read_from_the_links_payload_when_is_exploited_is_null():
+def test_kev_is_read_from_the_explicit_flags():
     v = _verdict_from(LOG4SHELL)
     assert v.kev and v.poc and v.nuclei and v.exploitable
     assert v.epss == 0.99999
+    assert sorted(v.links) == ["KEV", "Nuclei templates", "POC"]
+
+
+def test_kev_is_still_detected_on_a_pre_1_4_0_service():
+    """is_exploited was null back then; the catalogue records were the only signal."""
+    v = _verdict_from(LOG4SHELL_LEGACY)
+    assert v.kev and v.exploitable
 
 
 def test_kev_records_are_not_mistaken_for_a_link():
-    """Links.KEV is a list of catalogue entries, so it must not become a URL."""
-    v = _verdict_from(LOG4SHELL)
+    """A pre-1.4.0 Links.KEV is a list of entries, so it must not become a URL."""
+    v = _verdict_from(LOG4SHELL_LEGACY)
     assert list(v.links) == ["POC"]
     assert all(isinstance(u, str) for u in v.links.values())
 
