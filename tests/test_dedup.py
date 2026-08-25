@@ -1,0 +1,91 @@
+from dedup import _norm_file, iac_class, merge
+from normalize import Finding
+
+
+def sca(tool, rule, package, file="requirements.txt", severity="high", aliases=()):
+    return Finding(tool=tool, category="sca", rule_id=rule, severity=severity,
+                   message=rule, file=file, line=None, package=package,
+                   aliases=list(aliases))
+
+
+def iac(tool, rule, file="Dockerfile", line=1, severity="medium"):
+    return Finding(tool=tool, category="iac", rule_id=rule, severity=severity,
+                   message=rule, file=file, line=line)
+
+
+def test_norm_file_aligns_mount_prefixed_and_relative_paths():
+    assert _norm_file("/code/app.py") == _norm_file("app.py") == "app.py"
+    assert _norm_file("./app.py") == "app.py"
+
+
+def test_sca_merges_cve_and_ghsa_via_aliases():
+    findings = [
+        sca("trivy", "CVE-2018-1000656", "flask@1.0"),
+        sca("grype", "GHSA-562c-5r94-xh97", "flask@1.0",
+            aliases=["CVE-2018-1000656"]),
+    ]
+    merged, stats = merge(findings)
+    assert stats.raw == 2 and stats.unique == 1
+    assert merged[0].rule_id == "CVE-2018-1000656"        # CVE is canonical
+    assert merged[0].tools == ["grype", "trivy"]
+    assert "GHSA-562C-5R94-XH97" in merged[0].aliases
+
+
+def test_sca_keeps_distinct_cves_in_the_same_package():
+    merged, stats = merge([sca("trivy", "CVE-1", "flask@1.0"),
+                           sca("trivy", "CVE-2", "flask@1.0")])
+    assert stats.unique == 2
+
+
+def test_merged_finding_keeps_the_highest_severity():
+    merged, _ = merge([sca("trivy", "CVE-1", "flask@1.0", severity="medium"),
+                       sca("grype", "CVE-1", "flask@1.0", severity="critical")])
+    assert merged[0].severity == "critical"
+
+
+def test_iac_equivalence_merges_the_same_policy_across_engines():
+    # Same Dockerfile policy, three engines, three ids, three different lines.
+    findings = [iac("trivy", "DS-0002", line=1),
+                iac("checkov", "CKV_DOCKER_3", line=None),
+                iac("hadolint", "DL3002", line=7)]
+    merged, stats = merge(findings)
+    assert stats.unique == 1
+    assert merged[0].tools == ["checkov", "hadolint", "trivy"]
+
+
+def test_iac_equivalence_does_not_merge_different_policies():
+    merged, stats = merge([iac("trivy", "DS-0002"), iac("trivy", "DS-0026")])
+    assert stats.unique == 2
+
+
+def test_iac_equivalence_is_per_file():
+    merged, stats = merge([iac("trivy", "DS-0002", file="a/Dockerfile"),
+                           iac("checkov", "CKV_DOCKER_3", file="b/Dockerfile")])
+    assert stats.unique == 2
+
+
+def test_unmapped_iac_rules_keep_rule_file_line_identity():
+    assert iac_class("CKV_AWS_999") is None
+    merged, stats = merge([iac("checkov", "CKV_AWS_999", line=1),
+                           iac("checkov", "CKV_AWS_999", line=2)])
+    assert stats.unique == 2
+
+
+def test_secrets_merge_on_location_regardless_of_rule():
+    a = Finding("gitleaks", "secrets", "aws-key", "high", "m", "/code/x.env", 4)
+    b = Finding("trufflehog", "secrets", "trufflehog.AWS", "critical", "m", "x.env", 4)
+    merged, stats = merge([a, b])
+    assert stats.unique == 1 and merged[0].severity == "critical"
+
+
+def test_dedup_disabled_is_a_passthrough():
+    findings = [sca("trivy", "CVE-1", "flask@1.0"), sca("grype", "CVE-1", "flask@1.0")]
+    merged, stats = merge(findings, enabled=False)
+    assert len(merged) == 2 and stats.removed == 0
+
+
+def test_a_lone_finding_does_not_alias_its_own_id():
+    lone = Finding("semgrep", "sast", "python.lang.security.audit.x", "medium",
+                   "m", "a.py", 1)
+    merged, _ = merge([lone])
+    assert merged[0].aliases == []

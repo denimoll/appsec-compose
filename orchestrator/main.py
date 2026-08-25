@@ -9,9 +9,12 @@ from __future__ import annotations
 import json
 import os
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 import baseline as bl
+import coverage as cov
+import enrich as enr
 from config import load_config
 from converters import trufflehog_json_to_sarif
 from dedup import merge
@@ -22,7 +25,29 @@ from suppress import apply as apply_ignore
 
 REPORTS_DIR = "/reports"
 NATIVE_DIR = f"{REPORTS_DIR}/native"
+CODE_DIR = "/code"
 BASELINE_PATH = "/app/appsec-baseline.json"
+
+
+def _provenance(cfg, image_mode: bool) -> dict:
+    """What produced this report — the engines, their DBs, and the target."""
+    def _json_env(name: str) -> dict:
+        try:
+            return json.loads(os.environ.get(name) or "{}")
+        except json.JSONDecodeError:
+            return {}
+
+    target = (os.environ.get("ASS_IMAGE")
+              or ("docker-archive" if os.environ.get("ASS_IMAGE_TAR") else "")
+              or "filesystem")
+    return {
+        "appsec_compose": os.environ.get("ASS_VERSION", "unknown"),
+        "generated": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "target": target if image_mode else "filesystem",
+        "offline": cfg.offline,
+        "engines": _json_env("ASS_ENGINE_IMAGES"),
+        "databases": _json_env("ASS_DB_DATES"),
+    }
 
 
 def main() -> int:
@@ -51,8 +76,47 @@ def main() -> int:
               f"Check the image reference and registry credentials.", file=sys.stderr)
         return 2
 
+    # strict: a scanner that was expected to report but didn't (crashed, OOM,
+    # wrote unparseable output) must not pass as "0 findings".
+    if cfg.strict and (result.reports_missing or result.reports_errored):
+        if result.reports_missing:
+            print(f"ERROR: strict mode — no report from: "
+                  f"{', '.join(sorted(result.reports_missing))}", file=sys.stderr)
+        if result.reports_errored:
+            print(f"ERROR: strict mode — unreadable report(s): "
+                  f"{'; '.join(result.reports_errored)}", file=sys.stderr)
+        return 2
+
+    # Blind-spot check: an SCA engine that resolved nothing looks exactly like a
+    # project with no vulnerable dependencies, and the gate cannot tell them apart.
+    excludes = set(os.environ.get("ASS_EXCLUDES", "").split())
+    sca_found = sum(1 for f in result.findings if f.category == "sca")
+    coverage = cov.analyse(CODE_DIR, REPORTS_DIR, enabled, excludes,
+                           image_mode=image_mode, sca_findings=sca_found)
+    if cfg.strict and coverage.warnings:
+        for warning in coverage.warnings:
+            print(f"ERROR: strict mode — {warning.message} {warning.advice}",
+                  file=sys.stderr)
+        return 2
+
     merged, stats = merge(result.findings, enabled=cfg.dedup)
-    kept, suppressed = apply_ignore(merged, cfg.ignore)
+    kept, suppressed, expired = apply_ignore(merged, cfg.ignore)
+
+    # Exploitability enrichment runs after the merge, so each CVE is looked up
+    # once and the alias set is at its widest.
+    enrichment = enr.EnrichResult(verdicts={})
+    if cfg.enrich.get("enabled"):
+        if cfg.offline:
+            enrichment.error = "skipped: offline mode is on"
+        else:
+            enrichment = enr.apply(
+                kept, cfg.enrich["url"], cfg.enrich["api_key"],
+                cfg.enrich["timeout"],
+                reprioritize=cfg.enrich["mode"] == "reprioritize")
+        if enrichment.error and cfg.strict:
+            print(f"ERROR: strict mode — CVE-PaaS enrichment failed "
+                  f"({enrichment.error})", file=sys.stderr)
+            return 2
 
     # --update-baseline: snapshot current findings as the accepted state, no gate.
     if os.environ.get("ASS_UPDATE_BASELINE") == "1":
@@ -72,9 +136,14 @@ def main() -> int:
 
     # Machine-readable consolidated output (for ASPM/ASOC ingestion).
     consolidated = {
+        "provenance": _provenance(cfg, image_mode),
         "policy": {
             "fail_on": policy.threshold,
+            "fail_on_by_category": policy.thresholds,
+            "fail_on_exploitable": cfg.fail_on_exploitable,
+            "strict": cfg.strict,
             "breaching": policy.breaching,
+            "exploitable_breaching": policy.exploitable_breaching,
             "exit_code": policy.exit_code,
         },
         "dedup": {
@@ -84,11 +153,29 @@ def main() -> int:
             "duplicates_removed": stats.removed,
         },
         "suppressed_count": len(suppressed),
+        "expired_suppressions": [{"selectors": e.label, "expires": e.expires}
+                                 for e in expired],
+        "enrichment": {
+            "enabled": bool(cfg.enrich.get("enabled")),
+            "mode": cfg.enrich.get("mode"),
+            "requested": enrichment.requested,
+            "resolved": enrichment.resolved,
+            "reprioritized": enrichment.reprioritized,
+            "exploitable": enrichment.exploitable,
+            "error": enrichment.error,
+        },
         "baseline": {
             "enabled": cfg.baseline,
             "new": len(delta.new) if delta else None,
             "known": len(delta.known) if delta else None,
             "fixed": delta.fixed if delta else None,
+        },
+        "coverage": {
+            "manifests": coverage.manifests,
+            "ecosystems": coverage.ecosystems,
+            "sbom_components": coverage.sbom_components,
+            "warnings": [{"kind": w.kind, "message": w.message, "advice": w.advice}
+                         for w in coverage.warnings],
         },
         "severity_counts": policy.severity_counts,
         "category_counts": policy.category_counts,
@@ -104,12 +191,17 @@ def main() -> int:
     }
     Path(REPORTS_DIR, "findings.json").write_text(json.dumps(consolidated, indent=2))
 
+    provenance = consolidated["provenance"]
     render(result, policy, kept, stats, REPORTS_DIR,
-           suppressed_count=len(suppressed), delta=delta)
+           suppressed_count=len(suppressed), delta=delta, coverage=coverage,
+           enrichment=enrichment, expired=expired, provenance=provenance)
 
     # Console summary.
     total = sum(policy.severity_counts.values())
     print("=" * 60)
+    version = os.environ.get("ASS_VERSION", "")
+    if version:
+        print(f"appsec-compose {version}")
     dup_note = (f" ({stats.removed} duplicate(s) merged)"
                 if cfg.dedup and stats.removed else "")
     print(f"appsec-compose: {total} unique finding(s) across "
@@ -118,16 +210,32 @@ def main() -> int:
         print(f"  {sev:>8}: {policy.severity_counts[sev]}")
     if suppressed:
         print(f"  (suppressed by ignore rules: {len(suppressed)})")
+    for entry in expired:
+        print(f"  ! ignore rule expired {entry.expires}: {entry.label} "
+              f"— its findings count again")
+    if enrichment.error:
+        print(f"  ! CVE-PaaS enrichment unavailable: {enrichment.error}")
+    elif enrichment.requested:
+        note = (f", {enrichment.reprioritized} reprioritized"
+                if enrichment.reprioritized else "")
+        print(f"  exploitability: {enrichment.resolved}/{enrichment.requested} "
+              f"CVE(s) resolved, {enrichment.exploitable} exploitable{note}")
     if result.reports_missing:
         print(f"  ! missing reports: {', '.join(result.reports_missing)}")
     if result.reports_errored:
         print(f"  ! unreadable reports: {'; '.join(result.reports_errored)}")
+    for warning in coverage.warnings:
+        print(f"  ! SCA coverage: {warning.message}")
+        print(f"    -> {warning.advice}")
     if delta is not None:
         print(f"  baseline: {len(delta.new)} new, {len(delta.known)} known, "
               f"{delta.fixed} fixed")
+    if policy.exploitable_breaching:
+        print(f"  ({policy.exploitable_breaching} breaching on exploitability "
+              f"alone, below the severity threshold)")
     verdict = "FAIL" if policy.exit_code else "PASS"
     gate_scope = "new " if delta is not None else ""
-    print(f"Policy fail_on={policy.threshold} -> {verdict} "
+    print(f"Policy fail_on={policy.label} -> {verdict} "
           f"({policy.breaching} {gate_scope}at/above threshold)")
     sboms = sorted(p.name for p in Path(REPORTS_DIR).glob("sbom.*.json"))
     sbom_note = (" | " + " | ".join(sboms)) if sboms else ""

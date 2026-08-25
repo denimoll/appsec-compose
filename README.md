@@ -37,6 +37,23 @@ generates a SARIF from it, so SARIF-only ASPM tools can ingest it too. Our
 `findings.json` normalization is internal (for the summary); the per-tool native
 reports are what you upload to an ASPM.
 
+## Requirements
+
+On the host running the scan:
+
+| | |
+|---|---|
+| **Docker** + **Docker Compose v2** | every engine runs as a one-shot container |
+| **Python 3.9+** with **PyYAML** | `run.sh` renders `scan-config.yml` into `.env` via `scripts/render-env.py`; `pin.sh` and `preload.sh` use it too |
+| **Bash** | `run.sh`, `pin.sh`, `preload.sh` |
+
+```bash
+python3 -m pip install pyyaml     # or: apt install python3-yaml / brew install pyyaml
+```
+
+Nothing else is installed on the host — the scanners and the collector are all
+containers, and no `docker.sock` is mounted into them.
+
 ## Usage
 
 ```bash
@@ -50,7 +67,16 @@ reports are what you upload to an ASPM.
 ./run.sh --image ghcr.io/me/app:1.0 --registry-user me --registry-pass "$TOKEN"
 # build from a Dockerfile and scan the result:
 ./run.sh --build ./path/to/context [--dockerfile Dockerfile.prod]
+
+# fail if an enabled scanner produced no readable report:
+./run.sh /path/to/your/repo --strict
+# refuse to run unless every scanner is pinned by digest:
+./run.sh /path/to/your/repo --require-pinned
 ```
+
+Out of the box one engine per category runs (Semgrep, Trivy, Gitleaks, Checkov)
+and the gate fails on `high`+ — that is the recommended setup, not a minimum.
+The alternative engines and everything below are opt-in for when you want more.
 
 ## Configuration — one file
 
@@ -61,22 +87,177 @@ enabled scanners.
 
 ```yaml
 scanners:
-  semgrep:  { enabled: true, version: "1.97.0" }    # SAST
-  trivy:    { enabled: true, version: "0.58.0" }     # SCA + IaC + SBOM
-  gitleaks: { enabled: true, version: "v8.21.2" }    # secrets
-  checkov:  { enabled: true, version: "3.2.334" }    # IaC
+  semgrep:  { enabled: true, version: "1.174.0" }    # SAST
+  trivy:    { enabled: true, version: "0.74.0" }     # SCA + IaC + SBOM
+  gitleaks: { enabled: true, version: "v8.30.1" }    # secrets
+  checkov:  { enabled: true, version: "3.3.13" }     # IaC
 
 sbom: true                 # SBOM via Trivy
 sbom_formats: [cyclonedx]  # any of: cyclonedx, spdx
 fail_on: high              # critical|high|medium|low|none (none = report-only)
 unknown_severity: medium
+strict: false              # a scanner with no readable report fails the run
 offline: false             # use ./preload.sh cache, no network during scan
 ```
 
 Disable a check by setting `enabled: false` — that scanner won't run and the
 collector won't expect its report. Upgrade a tool by changing its `version`.
 Set `secrets_history: true` to have Gitleaks scan the full **git history**
-(needs a `.git` in the repo), not just the working tree.
+(needs a `.git` in the repo), not just the working tree. In CI that is usually
+more than you need — `secrets_history_range: "origin/main..HEAD"` limits it to
+the branch's own commits, which is orders of magnitude faster and still catches
+a secret that was committed and then removed within the branch.
+
+## Custom & auto Semgrep rules
+
+By default Semgrep runs the curated `p/default` pack. Point it at your own rules
+or let it pick rules for the repo's stack via `scanners.semgrep.rules`:
+
+```yaml
+scanners:
+  semgrep:
+    enabled: true
+    version: "1.174.0"
+    rules:
+      - default                      # the curated p/default pack
+      - auto                         # detect the stack -> matching registry packs
+      - "p/python"                   # any Semgrep registry ref
+      - "/semgrep-rules/custom.yml"  # a file from ./semgrep-rules
+```
+
+- **`auto`** scans the repo for languages/manifests (`.py`, `.go`, `.tf`,
+  `Dockerfile`, …) and adds the matching `p/<lang>` packs (online only; offline
+  falls back to the cached default pack).
+- Any `*.yml`/`*.yaml` you drop into **`./semgrep-rules/`** is mounted at
+  `/semgrep-rules` and auto-included — no config needed.
+
+## Scan scope (`exclude:`)
+
+Every engine skips the same set of directories, so vendored dependencies and
+build output don't bury the real findings (or dominate the runtime). Omit the
+key for the recommended defaults — `.git`, `node_modules`, `vendor`, `dist`,
+`build`, `target`, `.venv`, `venv`, `__pycache__`, `.gradle`, `.tox`,
+`.mypy_cache` — or set it to replace them:
+
+```yaml
+exclude:
+  - node_modules
+  - vendor
+  - "docs/**"      # path globs work too
+```
+
+An explicit empty list (`exclude: []`) scans everything. Entries are translated
+into each engine's own mechanism (`--exclude`, `--skip-dirs`, `--skip-path`, a
+generated Gitleaks allowlist, a TruffleHog regex file, …), so one list covers
+all nine.
+
+## Policy per category
+
+`fail_on` may be a single level or a map, so each practice gets the gate it
+deserves — a leaked credential is not the same event as a medium IaC lint:
+
+```yaml
+fail_on:
+  secrets: low        # any credential fails the build
+  sca: high
+  sast: critical
+  iac: none           # report-only
+  default: high       # categories not listed above
+```
+
+Each finding is compared against the threshold for its own category.
+`./run.sh --fail-on <level>` overrides the whole map with a single level.
+
+## Failing loudly (`strict`)
+
+Scanners always exit `0`, so a crashed engine would otherwise look like a clean
+result. With `strict: true` (or `--strict`) the run fails with exit `2` — rather
+than counting as "0 findings" — when either:
+
+- a scanner that was expected to report produced nothing readable, or
+- the [SCA coverage check](#sca-coverage-check) found dependency manifests that
+  no engine resolved.
+
+Off by default, since a flaky engine then breaks the build rather than degrading
+the scan.
+
+## Exploitability (CVE-PaaS)
+
+A CVSS score says how bad a vulnerability would be. It does not say whether
+anyone is exploiting it — which is why a CVSS-only gate fires on dozens of
+theoretical "high" findings and teams learn to ignore the report.
+
+Point the collector at a [CVE-PaaS](https://github.com/denimoll/CVE-PaaS)
+instance and every SCA finding carrying a CVE gains the other half of the
+picture: CISA KEV listing, EPSS score, public PoC, Nuclei template.
+
+> Use **CVE-PaaS 1.4.0 or newer**. Before that a KEV listing never reached the
+> verdict, so a vulnerability actively exploited in the wild but without a
+> public PoC came back under-prioritised. Older releases still work — the
+> collector reads whichever signals they provide — just less accurately.
+
+```yaml
+enrich:
+  cve_paas:
+    enabled: true
+    url: "http://host.docker.internal:8000"
+    api_key_env: CVE_PAAS_API_KEY   # env var name; the key is never in this file
+    mode: annotate                  # or: reprioritize
+    fail_on_exploitable: false
+```
+
+- **`annotate`** (default) leaves severity exactly as the scanner reported it
+  and adds `priority`, `epss`, `kev`, `poc` to each finding, the console line,
+  both summaries and `findings.json`. Nothing about your existing gate changes.
+- **`reprioritize`** lets the CVE-PaaS priority replace `severity`, keeping the
+  scanner's own in `scanner_severity`. Counts, baseline fingerprints and the
+  gate all follow the new value, so expect existing projects to shift.
+
+`fail_on_exploitable: true` adds a gate that is independent of severity: fail on
+anything with a KEV listing, a public PoC or a Nuclei template, whatever its
+CVSS. Combined with a relaxed severity gate this is the useful shape:
+
+```yaml
+fail_on:
+  sca: none          # stop failing on theoretical CVSS
+enrich:
+  cve_paas:
+    fail_on_exploitable: true    # fail on what is actually being exploited
+```
+
+Lookups are batched 50 at a time and CVE-PaaS caches them, so repeat runs are
+cheap. If the service is unreachable the scan continues on the scanners' own
+severities and says so; under `strict: true` that becomes a failure instead.
+The check is skipped in `offline` mode.
+
+> Only SCA findings that carry a CVE id are affected — SAST, secrets and IaC
+> keep the scanners' severities, and a finding known only by a GHSA with no CVE
+> alias cannot be looked up.
+
+## SCA coverage check
+
+The most dangerous result a dependency scanner can produce is *nothing*: an
+engine that parsed no manifests looks exactly like a project with no vulnerable
+dependencies, and the policy gate cannot tell them apart.
+
+The collector checks for that directly — it compares the manifests the repo
+declares against what the engines actually resolved into the SBOM, and says so
+when the answer is zero:
+
+```
+  ! SCA coverage: requirements.txt specifies version ranges, not exact versions
+    — Trivy and Syft resolve a package only from an exact version, so nothing
+    was scanned.
+    -> Pin the versions (`pkg==1.2.3`), commit a lock file, or enable the `osv`
+       scanner, which resolves ranges.
+```
+
+The advice names the cause and only an engine that actually solves it — OSV
+resolves version ranges, Grype shares Syft's exact-version requirement, so it is
+never offered as the answer to that particular gap. An engine you already have
+enabled is never suggested. The warning is recorded in `findings.json` under
+`coverage`, printed to the console and shown in both summaries. It does **not**
+fail the build on its own; with `strict: true` it does.
 
 ## Offline / air-gapped
 
@@ -118,6 +299,21 @@ table with **category filters**, expandable **details** (description + advisory
 link per finding), and — in baseline mode — a **NEW** flag on findings added
 since the accepted snapshot. It is fully self-contained (no external assets).
 
+## Provenance
+
+Every report records what produced it — the appsec-compose version, each
+engine's resolved image ref (the immutable digest when pinned), the
+vulnerability-database dates, and whether the scan ran offline. A clean result
+from a three-week-old database is not the same as a clean result, and an
+artifact heading into an ASPM should say which tool version produced it.
+
+It lands in `findings.json` under `provenance` and at the foot of both
+summaries. To see the resolved engines without running a scan:
+
+```bash
+./run.sh --version
+```
+
 ## Policy / exit codes
 
 The **collector** decides pass/fail: exit `1` if any finding is at or above
@@ -148,7 +344,11 @@ the summary (the raw native reports are left untouched for ASPM import):
 - **SCA** — same `package@version` + file, clustered by overlapping vuln IDs.
   Trivy's `CVE-2018-1000656` and Grype's `GHSA-562c-5r94-xh97` merge because
   Grype's `relatedVulnerabilities` lists that CVE — so CVE/GHSA aliases collapse.
-- **SAST/IaC** — same rule at the same `(file, line)`.
+- **IaC** — engines use different ids for the same policy (a Dockerfile with no
+  `USER` is Trivy's `DS-0002`, Checkov's `CKV_DOCKER_3` and Hadolint's `DL3002`),
+  so findings whose rule maps to a known equivalence class merge per file.
+  Unmapped rules keep their own `(rule, file, line)` identity.
+- **SAST** — same rule at the same `(file, line)`.
 
 A merged finding keeps the highest severity, records **every tool** that
 reported it, and lists the equivalent IDs as aliases. `findings.json` reports
@@ -175,6 +375,39 @@ ignore:
 
 Suppressed findings are excluded from `fail_on` but recorded in `findings.json`
 under `suppressed` (with the reason) for the audit trail.
+
+Add `expires:` to make an acceptance temporary — an accepted risk should be
+re-argued, not inherited by whoever maintains the repo in two years:
+
+```yaml
+ignore:
+  - rule: CVE-2018-1000656
+    reason: "no fix available, mitigated at the proxy"
+    expires: 2026-12-01
+```
+
+Past that date the entry stops suppressing anything, its findings count towards
+the gate again, and the run reports which entries lapsed (console, both
+summaries, and `expired_suppressions` in `findings.json`).
+
+## Scanning several projects from one clone
+
+State can live outside the tool directory, so one checkout can serve many
+projects:
+
+```bash
+./run.sh /src/api   --name api   --config profiles/api.yml \
+                    --reports /var/appsec/api   --baseline /var/appsec/api/baseline.json
+./run.sh /src/front --name front --config profiles/front.yml \
+                    --reports /var/appsec/front --baseline /var/appsec/front/baseline.json
+```
+
+`--name` namespaces the containers (`COMPOSE_PROJECT_NAME`), and `cache/` stays
+shared on purpose — the vulnerability databases are the same for every project.
+
+> Run projects **sequentially**. `.env` and the generated `excludes/` still live
+> in the tool directory, so two runs started at the same time from one clone
+> would overwrite each other's rendered config.
 
 ## Baseline (gate on new findings)
 
@@ -225,6 +458,11 @@ lock entry safely falls back to its tag). Delete the lock to go back to tags.
 To pin a **single** tool by hand, put a digest in its `version` field instead of
 a tag — `version: "sha256:abc..."` resolves to `repo@sha256:abc...`.
 
+A lock that no longer covers every enabled scanner (someone bumped a `version`
+and forgot to re-pin) prints a warning. Set `require_pinned: true` — or pass
+`--require-pinned` — to make that an error instead, so a supply-chain-sensitive
+pipeline can never silently fall back to a mutable tag.
+
 ## How it works
 
 1. `run.sh` renders `scan-config.yml` → `.env` and bind-mounts the target repo
@@ -245,4 +483,44 @@ preload.sh              # offline cache populator
 scan-config.yml         # the single file you edit
 scripts/render-env.py   # scan-config.yml -> .env
 orchestrator/           # Python collector (config, normalize, policy, summary)
+tests/                  # collector unit tests (pytest)
 ```
+
+## Tests
+
+The collector decides what counts as a finding, what merges, what is suppressed
+and whether the build fails — so it is unit-tested:
+
+```bash
+python3 -m pip install -r tests/requirements.txt
+python3 -m pytest tests/ -q
+```
+
+Unit tests cannot see the compose wiring, though, and every engine is invoked
+through a shell command line that upstream can change underneath us. Gitleaks,
+for instance, kept `detect` as a deprecated alias that exits `0` and writes a
+valid but **empty** report — so the scan would have gone on reporting zero
+secrets, and even `strict` would have been satisfied. The smoke test runs the
+whole pipeline over a deliberately vulnerable fixture and asserts that each
+engine found the thing planted for it:
+
+```bash
+./scripts/smoke-test.sh      # needs Docker; ~2 min
+```
+
+Both run on every push in [`appsec-scan.yml`](.github/workflows/appsec-scan.yml),
+and the scan job depends on them.
+
+## Configuration errors
+
+Unknown keys are rejected before a single container starts, with a suggestion:
+
+```
+ERROR: invalid scan-config.yml:
+  scan-config.yml: unknown key 'fail_on_severity' — did you mean 'fail_on'?
+  scan-config.yml: unknown key 'strickt' — did you mean 'strict'?
+```
+
+A mistyped key used to be ignored in silence, which meant the gate quietly ran
+at its default while the config said otherwise. Every problem in the file is
+reported at once.

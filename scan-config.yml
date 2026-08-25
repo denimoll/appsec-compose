@@ -5,7 +5,7 @@
 
 # ---- Scanners --------------------------------------------------------
 # Toggle each check on/off and pin its image version (bump to upgrade).
-# `version` may be a tag ("1.97.0") or a digest ("sha256:abc...") to pin one
+# `version` may be a tag ("1.174.0") or a digest ("sha256:abc...") to pin one
 # tool immutably; ./pin.sh pins all of them at once via image-digests.lock.
 # Several tools cover the same category — enable one, or several at once;
 # every enabled tool produces its own native report and all are aggregated.
@@ -13,51 +13,116 @@ scanners:
   # -- SAST -----------------------------------------------------------
   semgrep:                 # source code vulnerabilities
     enabled: true
-    version: "1.97.0"
+    version: "1.174.0"
+    # Optional rule sources (each becomes a `--config`). Omit for the default
+    # pack. Entries: "default" (curated pack), "auto" (detect the repo's stack
+    # and pull matching registry packs), a registry ref ("p/python", "r/..."),
+    # or a path under ./semgrep-rules (mounted at /semgrep-rules). Any *.yml in
+    # ./semgrep-rules is also auto-included. Example:
+    # rules: [default, auto, "p/python", "/semgrep-rules/custom.yml"]
 
   # -- SCA  (dependency vulnerabilities) — Trivy / Grype / OSV ---------
   trivy:                   # also covers IaC (config) + SBOM (see below)
     enabled: true
-    version: "0.58.0"
+    version: "0.74.0"
   grype:                   # alternative SCA engine (Anchore)
     enabled: false
-    version: "v0.85.0"
+    version: "v0.117.0"
   osv:                     # alternative SCA engine (Google OSV) — needs network
     enabled: false
-    version: "v2.4.0"
+    version: "v2.5.1"
 
   # -- Secrets — Gitleaks and/or TruffleHog ---------------------------
   gitleaks:                # fast pattern-based secret scanning
     enabled: true
-    version: "v8.21.2"
+    version: "v8.30.1"
   trufflehog:              # detector-based, can verify secrets
     enabled: false
-    version: "3.88.0"
+    version: "3.97.0"
 
   # -- IaC — Checkov and/or Hadolint ----------------------------------
   checkov:                 # IaC policy (deeper than Trivy config)
     enabled: true
-    version: "3.2.334"
+    version: "3.3.13"
   hadolint:                # Dockerfile linter / best-practices
     enabled: false
-    version: "2.12.0-alpine"
+    version: "v2.15.1-alpine"
 
   # -- SBOM generator — Syft (Trivy also emits one via `sbom:` below) --
   syft:                    # CycloneDX SBOM (Anchore) -> reports/sbom.syft.cdx.json
     enabled: false
-    version: "v1.18.0"
+    version: "v1.51.0"
 
 # ---- Extra artifacts -------------------------------------------------
 sbom: true                 # generate an SBOM via Trivy (when `trivy` is enabled)
 sbom_formats: [cyclonedx]  # any of: cyclonedx, spdx -> reports/sbom.trivy.<fmt>.json
                            # (Syft, if enabled, always emits both formats)
 secrets_history: false     # true => Gitleaks also scans git history (needs .git)
+secrets_history_range: ""  # limit the history scan to a commit range, e.g.
+                           # "origin/main..HEAD" (implies secrets_history) — in
+                           # CI this scans the branch's own commits, not all of
+                           # history, which is dramatically faster.
+
+# ---- Scan scope ------------------------------------------------------
+# Directories every engine skips. Omit the key for the recommended defaults
+# below; set it (even to []) to replace them. Entries are directory names or
+# path globs, applied through each engine's own exclusion mechanism.
+# exclude:
+#   - .git
+#   - node_modules
+#   - vendor
+#   - dist
+#   - build
+#   - target
+#   - .venv
+#   - venv
+#   - __pycache__
+#   - .gradle
+#   - .tox
+#   - .mypy_cache
+
+# ---- Exploitability enrichment ---------------------------------------
+# CVSS says how bad a vulnerability would be; it does not say whether anyone is
+# exploiting it. CVE-PaaS (https://github.com/denimoll/CVE-PaaS) answers that —
+# CISA KEV, EPSS, public PoC, Nuclei template — and returns a priority on the
+# same scale used here. Only SCA findings carrying a CVE id are affected.
+# Use CVE-PaaS >= 1.4.0: earlier releases never let a KEV listing reach the
+# verdict, so a CVE exploited in the wild but without a public PoC came back
+# under-prioritised. Older versions still work, just less accurately.
+enrich:
+  cve_paas:
+    enabled: false
+    url: "http://host.docker.internal:8000"
+    api_key_env: CVE_PAAS_API_KEY   # env var holding the key; never put it here
+    mode: annotate     # annotate    = add priority/EPSS/KEV/PoC, keep severity
+                       # reprioritize = let the CVE-PaaS priority replace
+                       #                severity (the scanner's own is kept in
+                       #                `scanner_severity`)
+    timeout: 30
+    fail_on_exploitable: false      # fail on anything with a KEV listing, a
+                                    # public PoC or a Nuclei template, whatever
+                                    # its CVSS — combine with `sca: none` below
+                                    # to gate on real exploitability only.
 
 # ---- Policy (drives the CI exit code) --------------------------------
 fail_on: high              # critical | high | medium | low | none  (none = report-only)
+                           # May also be a per-category map, so each practice
+                           # gets the gate it deserves:
+                           # fail_on:
+                           #   secrets: low       # any leaked credential fails
+                           #   sca: high
+                           #   sast: critical
+                           #   iac: none          # report-only
+                           #   default: high      # categories not listed
+                           # (./run.sh --fail-on L overrides the whole map.)
 unknown_severity: medium   # how to rank findings that carry no severity
 dedup: true                # merge duplicate findings across tools
                            # (e.g. Trivy CVE == Grype GHSA via aliases)
+strict: false              # true => a scanner that ran but produced no readable
+                           # report fails the run (exit 2) instead of silently
+                           # counting as "0 findings" (./run.sh --strict)
+require_pinned: false      # true => refuse to run unless every enabled scanner
+                           # has a digest in image-digests.lock (./pin.sh)
 baseline: false            # gate only on findings NEW since the accepted
                            # appsec-baseline.json (./run.sh ... --update-baseline)
 
@@ -68,6 +133,9 @@ ignore: []
 # ignore:
 #   - rule: CVE-2018-1000656            # accept a specific vuln
 #     reason: "no fix available, mitigated at the proxy"
+#     expires: 2026-12-01               # after this date it stops suppressing
+#                                       # and the run says so — an accepted risk
+#                                       # should be re-argued, not inherited
 #   - file: "tests/**"                  # ignore everything under tests/
 #     reason: "test fixtures"
 #   - rule: "generic.*"                 # glob over rule ids
