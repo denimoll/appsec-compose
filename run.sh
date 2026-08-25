@@ -4,6 +4,10 @@
 #   ./run.sh <path-to-repo>  [--fail-on L] [--strict] [--update-baseline]
 #   ./run.sh --image <ref>   [--fail-on L]        # scan a container image
 #
+# State can be moved out of this directory, so one clone can scan several
+# projects: --config, --baseline and --reports. Containers are namespaced per
+# run, but .env and excludes/ are still shared — run projects sequentially.
+#
 # Reads scan-config.yml, runs the enabled scanners over the target (repo or
 # image) and writes reports to ./reports/. Exit code mirrors the collector's
 # policy verdict (0 = pass, 1 = fail).
@@ -11,6 +15,7 @@ set -euo pipefail
 
 usage() {
   echo "Usage: $0 <path-to-repo> [--fail-on L] [--strict] [--require-pinned] [--update-baseline]" >&2
+  echo "       $0 <path-to-repo> [--config <file>] [--baseline <file>] [--reports <dir>] [--name <slug>]" >&2
   echo "       $0 --image <ref> [--registry-user U --registry-pass P] [--fail-on L]" >&2
   echo "       $0 --build <context> [--dockerfile <path>] [--fail-on L]" >&2
   exit 2
@@ -20,6 +25,7 @@ usage() {
 IMAGE_TOOLS=" trivy grype syft "
 
 TARGET=""; IMAGE_REF=""; BUILD_CTX=""; DOCKERFILE=""; FAIL_ON_OVERRIDE=""
+CONFIG_FILE=""; BASELINE_FILE=""; REPORTS_DIR=""; PROJECT_NAME=""
 REG_USER="${REGISTRY_USER:-}"; REG_PASS="${REGISTRY_PASS:-}"
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -28,6 +34,10 @@ while [[ $# -gt 0 ]]; do
     --dockerfile) DOCKERFILE="${2:-}"; shift 2 ;;
     --registry-user) REG_USER="${2:-}"; shift 2 ;;
     --registry-pass) REG_PASS="${2:-}"; shift 2 ;;
+    --config) CONFIG_FILE="${2:-}"; shift 2 ;;
+    --baseline) BASELINE_FILE="${2:-}"; shift 2 ;;
+    --reports) REPORTS_DIR="${2:-}"; shift 2 ;;
+    --name) PROJECT_NAME="${2:-}"; shift 2 ;;
     --fail-on) FAIL_ON_OVERRIDE="${2:-}"; shift 2 ;;
     --strict) export ASS_STRICT=1; shift ;;
     --require-pinned) export ASS_REQUIRE_PINNED=1; shift ;;
@@ -40,6 +50,28 @@ done
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
+
+# Resolve the per-project state paths (defaults keep the single-project layout).
+abspath() { [[ "$1" = /* ]] && echo "$1" || echo "$PWD/$1"; }
+
+if [[ -n "$CONFIG_FILE" ]]; then
+  [[ -f "$CONFIG_FILE" ]] || { echo "Error: config '$CONFIG_FILE' not found" >&2; exit 2; }
+  ASS_CONFIG_FILE="$(abspath "$CONFIG_FILE")"; export ASS_CONFIG_FILE
+fi
+if [[ -n "$REPORTS_DIR" ]]; then
+  mkdir -p "$REPORTS_DIR/native"
+  ASS_REPORTS_DIR="$(abspath "$REPORTS_DIR")"; export ASS_REPORTS_DIR
+fi
+if [[ -n "$BASELINE_FILE" ]]; then
+  [[ -f "$BASELINE_FILE" ]] || printf '{"fingerprints": []}' > "$BASELINE_FILE"
+  ASS_BASELINE_FILE="$(abspath "$BASELINE_FILE")"; export ASS_BASELINE_FILE
+fi
+# Namespace the containers so two projects never collide on service names.
+if [[ -n "$PROJECT_NAME" ]]; then
+  slug="$(printf '%s' "$PROJECT_NAME" | tr '[:upper:]' '[:lower:]' | tr -cs '[:alnum:]_-' '-')"
+  COMPOSE_PROJECT_NAME="appsec-${slug%-}"
+  export COMPOSE_PROJECT_NAME
+fi
 # Empty dir for the (unused) /code mount in image mode; in-project so Docker can
 # always bind-mount it. .img-archive holds a saved image tar in build mode.
 mkdir -p .img-empty .img-archive excludes
@@ -105,15 +137,18 @@ render_out="$(python3 scripts/render-env.py)" || exit $?
 eval "$render_out"
 [[ -n "$FAIL_ON_OVERRIDE" ]] && export FAIL_ON="$FAIL_ON_OVERRIDE"
 
-mkdir -p reports/native cache/semgrep cache/trivy cache/grype semgrep-rules excludes
+# Cache stays global: the vulnerability DBs are shared across every project.
+REPORTS="${ASS_REPORTS_DIR:-$SCRIPT_DIR/reports}"
+mkdir -p "$REPORTS/native" cache/semgrep cache/trivy cache/grype semgrep-rules excludes
 
 # Clear last run's native reports. A scanner that is disabled (or that now
 # fails) would otherwise leave a stale SARIF behind, which CI's hashFiles()
 # guards would happily upload as if it were current.
-rm -f reports/native/*.sarif reports/native/*.json
-rm -f reports/sbom.*.json
+rm -f "$REPORTS"/native/*.sarif "$REPORTS"/native/*.json
+rm -f "$REPORTS"/sbom.*.json
 # Ensure the baseline file exists so Docker can bind-mount it (empty = no baseline).
-[[ -f appsec-baseline.json ]] || echo '{"fingerprints": []}' > appsec-baseline.json
+BASELINE="${ASS_BASELINE_FILE:-$SCRIPT_DIR/appsec-baseline.json}"
+[[ -f "$BASELINE" ]] || echo '{"fingerprints": []}' > "$BASELINE"
 
 # In image mode keep only image-capable scanners.
 if [[ "$IMAGE_MODE" == "1" ]]; then
@@ -133,6 +168,8 @@ if [[ "$ASS_OFFLINE" == "1" && "$IMAGE_MODE" != "1" && ! -s cache/semgrep/defaul
   exit 2
 fi
 
+[[ -n "${ASS_CONFIG_FILE:-}" ]] && echo "Config   : $ASS_CONFIG_FILE"
+[[ -n "${ASS_REPORTS_DIR:-}" ]] && echo "Reports  : $ASS_REPORTS_DIR"
 echo "Target   : $TARGET_LABEL"
 echo "Scanners : $ASS_ENABLED"
 echo "Mode     : $([[ "$ASS_OFFLINE" == "1" ]] && echo offline || echo online)"
@@ -157,5 +194,5 @@ set -e
 docker compose down --remove-orphans >/dev/null 2>&1 || true
 
 echo
-echo "Done. See ./reports/summary.md (exit code: $code)"
+echo "Done. See $REPORTS/summary.md (exit code: $code)"
 exit "$code"

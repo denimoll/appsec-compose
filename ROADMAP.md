@@ -26,24 +26,33 @@
 - **SCA coverage check** — warns when the repo declares dependency manifests
   that no engine resolved (the silent-zero failure mode), with advice naming the
   engine that actually fixes the gap.
+- **Exploitability enrichment** — optional [CVE-PaaS](https://github.com/denimoll/CVE-PaaS)
+  lookup adds KEV / EPSS / PoC / Nuclei data to SCA findings, in `annotate` or
+  `reprioritize` mode, plus a `fail_on_exploitable` gate independent of CVSS.
+- **Expiring suppressions** — `expires:` on an `ignore` entry.
+- **Multi-project primitives** — `--config`, `--baseline`, `--reports`,
+  `--name` (per-run `COMPOSE_PROJECT_NAME`); `cache/` stays shared.
 - **Tests** — pytest suite over the collector, gating the CI scan job.
 
-## Release: 1.0.0
+## Release: 1.1.0
 
-- [ ] **Validate on a real production project** (gate — must pass before tagging).
+- [ ] **Re-validate on a real production project** (gate — must pass before
+      tagging). Gate behaviour changed in three places this cycle (per-category
+      `fail_on`, `strict`, `exclude:`), so existing projects may shift.
 - [ ] Merge `develop` → `main`.
-- [ ] Tag `v1.0.0` + GitHub Release (triggers the collector image publish to GHCR).
+- [ ] Tag `v1.1.0` + GitHub Release (triggers the collector image publish to GHCR).
 
 ## Multi-project & UI (primary future direction)
 
 A "project" = a named **profile** (a scan-config) applied to a target entity.
 
 - [ ] **Enabling primitives** (each independently useful):
-  - [ ] `run.sh --config <path> --baseline <path> --reports <dir>` — decouple
+  - [x] `run.sh --config <path> --baseline <path> --reports <dir>` — decouple
         state from the tool directory.
-  - [ ] `COMPOSE_PROJECT_NAME=appsec-<slug>` per run — isolate containers/volumes.
-  - [ ] `render-env.py` accepts a config path.
-  - [ ] Keep `cache/` (Trivy/Grype/Semgrep DBs) global/shared across projects.
+  - [x] `COMPOSE_PROJECT_NAME=appsec-<slug>` per run — isolate containers/volumes.
+  - [x] `render-env.py` accepts a config path.
+  - [x] Keep `cache/` (Trivy/Grype/Semgrep DBs) global/shared across projects.
+  - [ ] Per-run `.env` / `excludes/` so projects can run **concurrently**.
 - [ ] **Profiles** — one main profile or several reusable profiles (which
       practices/engines, SBOM formats, policy, etc.).
 - [ ] **Projects** — entities with their own name, path/address (repo URL or

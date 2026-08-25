@@ -19,6 +19,7 @@ class PolicyResult:
     tool_counts: dict         # tool -> count
     thresholds: dict = field(default_factory=dict)  # category -> level override
     label: str = ""           # human-readable rendering of the whole policy
+    exploitable_breaching: int = 0   # breached only because they are exploitable
 
     def __post_init__(self):
         if not self.label:
@@ -32,12 +33,24 @@ def _bump_unknown(findings: list[Finding], unknown_severity: str) -> None:
             f.severity = unknown_severity
 
 
-def breaches(finding: Finding, cfg: Config) -> bool:
+def breaches_severity(finding: Finding, cfg: Config) -> bool:
     """True when a finding is at or above the threshold for its category."""
     threshold = cfg.threshold_for(finding.category)
     if threshold == "none":
         return False
     return _RANK[finding.severity] >= _RANK[threshold]
+
+
+def breaches(finding: Finding, cfg: Config) -> bool:
+    """The gate: severity threshold, or proven exploitability when enabled.
+
+    The two are deliberately independent — `fail_on_exploitable` lets a team
+    stop gating on theoretical CVSS while still failing on anything with a
+    public exploit or a KEV listing.
+    """
+    if cfg.fail_on_exploitable and finding.exploitable:
+        return True
+    return breaches_severity(finding, cfg)
 
 
 def evaluate(findings: list[Finding], cfg: Config,
@@ -64,9 +77,15 @@ def evaluate(findings: list[Finding], cfg: Config,
 
     gate = gate_findings if gate_findings is not None else findings
     breaching = sum(1 for f in gate if breaches(f, cfg))
+    exploitable_only = sum(1 for f in gate if breaches(f, cfg)
+                           and not breaches_severity(f, cfg))
     exit_code = 1 if breaching > 0 else 0
+
+    label = cfg.threshold_label()
+    if cfg.fail_on_exploitable:
+        label += " + exploitable"
 
     return PolicyResult(exit_code, cfg.fail_on, breaching,
                         severity_counts, category_counts, tool_counts,
                         thresholds=dict(cfg.fail_on_by_category),
-                        label=cfg.threshold_label())
+                        label=label, exploitable_breaching=exploitable_only)

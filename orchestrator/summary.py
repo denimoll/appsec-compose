@@ -31,6 +31,15 @@ _Suppressed by ignore rules: {{ suppressed_count }} (excluded from the gate)._
 {% if delta %}
 _Baseline: **{{ delta.new | length }} new**, {{ delta.known | length }} known, {{ delta.fixed }} fixed (gate applies to new only)._
 {% endif %}
+{% if enrichment and enrichment.requested %}
+_Exploitability: {{ enrichment.resolved }}/{{ enrichment.requested }} CVE(s) resolved via CVE-PaaS, **{{ enrichment.exploitable }} exploitable** (KEV / public PoC / Nuclei template){% if enrichment.reprioritized %}, {{ enrichment.reprioritized }} reprioritized{% endif %}._
+{% endif %}
+{% if expired %}
+## Expired suppressions
+
+{% for e in expired %}- `{{ e.label }}` expired {{ e.expires }} — its findings count again.
+{% endfor %}
+{% endif %}
 {% if coverage and coverage.warnings %}
 ## ⚠ SCA coverage
 
@@ -61,9 +70,9 @@ _Baseline: **{{ delta.new | length }} new**, {{ delta.known | length }} known, {
 
 ## Findings ({{ shown_count }}{% if total > shown_count %} of {{ total }}{% endif %})
 
-{% if top_findings %}| Severity | Tools | Category | Rule | Location |
-|---|---|---|---|---|
-{% for f in top_findings %}| {{ f.severity }}{% if f.is_new %} 🆕{% endif %} | {{ f.tools | join(", ") }} | {{ f.category }} | `{{ f.rule_id }}`{% if f.url %} [↗]({{ f.url }}){% endif %} | {{ f.file }}{% if f.line %}:{{ f.line }}{% endif %} |
+{% if top_findings %}| Severity | Exploit | Tools | Category | Rule | Location |
+|---|---|---|---|---|---|
+{% for f in top_findings %}| {{ f.severity }}{% if f.is_new %} 🆕{% endif %} | {% if f.kev %}KEV{% elif f.poc %}PoC{% elif f.nuclei %}nuclei{% elif f.epss is not none %}EPSS {{ "%.2f" | format(f.epss) }}{% else %}—{% endif %} | {{ f.tools | join(", ") }} | {{ f.category }} | `{{ f.rule_id }}`{% if f.url %} [↗]({{ f.url }}){% endif %} | {{ f.file }}{% if f.line %}:{{ f.line }}{% endif %} |
 {% endfor %}{% else %}_No findings._
 {% endif %}
 > Native reports per tool are in `reports/native/`.
@@ -128,6 +137,11 @@ _HTML_TEMPLATE = """<!doctype html>
    border-radius:10px;padding:14px 16px;margin:22px 0 0}
  .alert-t{font-weight:700;color:var(--med);margin-bottom:6px}
  .alert-a{margin-top:6px;color:var(--muted)}
+ .expl{display:inline-block;font-size:11px;font-weight:700;padding:1px 6px;border-radius:5px;
+   margin:1px 2px 1px 0;white-space:nowrap}
+ .expl.kev{background:var(--crit);color:#fff}
+ .expl.poc{background:var(--high);color:#fff}
+ .expl.epss{background:transparent;color:var(--muted);border:1px solid var(--line);font-weight:600}
  .chip{font-size:12px;padding:4px 10px;border-radius:999px;border:1px solid var(--line);background:var(--card)}
  .chip.ok{border-color:#bce3c8;color:var(--pass)} .chip.warn{border-color:#f3d2a6;color:#9a6700}
  .chip.err{border-color:#f0bcc2;color:var(--fail)}
@@ -159,7 +173,7 @@ _HTML_TEMPLATE = """<!doctype html>
 </style></head><body>
 <header><div class="wrap">
   <div class="brand"><span class="dot"></span>appsec-compose</div>
-  <div class="sub">Generated {{ generated }} UTC &middot; policy fail_on = {{ policy.label }}{% if stats.removed %} &middot; {{ total }} unique of {{ stats.raw }} ({{ stats.removed }} merged){% endif %}{% if suppressed_count %} &middot; {{ suppressed_count }} suppressed{% endif %}{% if delta %} &middot; {{ delta.new | length }} new / {{ delta.known | length }} known / {{ delta.fixed }} fixed{% endif %}</div>
+  <div class="sub">Generated {{ generated }} UTC &middot; policy fail_on = {{ policy.label }}{% if stats.removed %} &middot; {{ total }} unique of {{ stats.raw }} ({{ stats.removed }} merged){% endif %}{% if suppressed_count %} &middot; {{ suppressed_count }} suppressed{% endif %}{% if delta %} &middot; {{ delta.new | length }} new / {{ delta.known | length }} known / {{ delta.fixed }} fixed{% endif %}{% if enrichment and enrichment.exploitable %} &middot; {{ enrichment.exploitable }} exploitable{% endif %}</div>
   <div class="pill {{ 'fail' if policy.exit_code else 'pass' }}">
     <span class="big">{{ '✗' if policy.exit_code else '✓' }} {{ verdict }}</span>
     &middot; {{ policy.breaching }} at/above threshold
@@ -176,6 +190,22 @@ _HTML_TEMPLATE = """<!doctype html>
   <div class="alert-a">{{ w.advice }}</div>
 </div>
 {% endfor %}
+{% endif %}
+{% if expired %}
+<div class="alert">
+  <div class="alert-t">&#9888; Expired suppressions</div>
+  {% for e in expired %}
+  <div><code>{{ e.label }}</code> expired {{ e.expires }} &mdash; its findings count again.</div>
+  {% endfor %}
+  <div class="alert-a">Re-argue the risk and set a new <code>expires</code>, or drop the entry.</div>
+</div>
+{% endif %}
+{% if enrichment and enrichment.error %}
+<div class="alert">
+  <div class="alert-t">&#9888; Exploitability data unavailable</div>
+  <div>CVE-PaaS could not be reached: {{ enrichment.error }}</div>
+  <div class="alert-a">Severities are the scanners' own; no exploitability gate was applied.</div>
+</div>
 {% endif %}
 <h2>Severity overview</h2>
 <div class="cards">
@@ -223,11 +253,18 @@ _HTML_TEMPLATE = """<!doctype html>
   {% for cat, n in filter_cats %}<button data-f="{{ cat }}">{{ cat }} ({{ n }})</button>{% endfor %}
 </div>
 <table>
-  <thead><tr><th>Severity</th><th>Tools</th><th>Category</th><th>Rule</th><th>Location</th><th>Detail</th></tr></thead>
+  <thead><tr><th>Severity</th><th>Exploit</th><th>Tools</th><th>Category</th><th>Rule</th><th>Location</th><th>Detail</th></tr></thead>
   <tbody>
   {% for f in top_findings %}
     <tr data-cat="{{ f.category }}"{% if f.is_new %} class="new"{% endif %}>
       <td><span class="sev sev-{{ f.severity }}">{{ f.severity }}</span>{% if f.is_new %}<span class="badge-new">NEW</span>{% endif %}</td>
+      <td>
+        {% if f.kev %}<span class="expl kev" title="CISA Known Exploited Vulnerabilities">KEV</span>{% endif %}
+        {% if f.poc %}<span class="expl poc" title="public proof of concept">PoC</span>{% endif %}
+        {% if f.nuclei %}<span class="expl poc" title="Nuclei template exists">nuclei</span>{% endif %}
+        {% if f.epss is not none %}<span class="expl epss" title="probability of exploitation in the wild">EPSS {{ "%.2f" | format(f.epss) }}</span>{% endif %}
+        {% if not f.kev and not f.poc and not f.nuclei and f.epss is none %}<span class="loc">&mdash;</span>{% endif %}
+      </td>
       <td class="tool">{{ f.tools | join(", ") }}</td>
       <td>{{ f.category }}</td>
       <td><code>{{ f.rule_id }}</code>{% if f.aliases %}<br><span class="loc">{{ f.aliases | join(", ") }}</span>{% endif %}</td>
@@ -272,7 +309,7 @@ def _sort_findings(findings: list[Finding]) -> list[Finding]:
 
 def _context(result: ScanResult, policy: PolicyResult, findings: list[Finding],
              stats: DedupStats, suppressed_count: int, delta,
-             coverage=None) -> dict:
+             coverage=None, enrichment=None, expired=None) -> dict:
     total = sum(policy.severity_counts.values())
     top = _sort_findings(findings)[:_TOP_N]
     # Filter chips are derived from the rows actually shown, so a filter can
@@ -286,6 +323,8 @@ def _context(result: ScanResult, policy: PolicyResult, findings: list[Finding],
         "suppressed_count": suppressed_count,
         "delta": delta,
         "coverage": coverage,
+        "enrichment": enrichment,
+        "expired": expired or [],
         "verdict": "FAIL" if policy.exit_code else "PASS",
         "sev_order": _DISPLAY_ORDER,
         "total": total,
@@ -303,10 +342,11 @@ def _context(result: ScanResult, policy: PolicyResult, findings: list[Finding],
 
 def render(result: ScanResult, policy: PolicyResult, findings: list[Finding],
            stats: DedupStats, out_dir: str = "/reports",
-           suppressed_count: int = 0, delta=None, coverage=None) -> None:
+           suppressed_count: int = 0, delta=None, coverage=None,
+           enrichment=None, expired=None) -> None:
     env = Environment(autoescape=False, trim_blocks=True, lstrip_blocks=True)
     ctx = _context(result, policy, findings, stats, suppressed_count, delta,
-                   coverage)
+                   coverage, enrichment, expired)
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
     (out / "summary.md").write_text(env.from_string(_MD_TEMPLATE).render(**ctx))

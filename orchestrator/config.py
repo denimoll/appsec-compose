@@ -7,6 +7,8 @@ from pathlib import Path
 
 import yaml
 
+import enrich
+
 # Severity ordering, lowest -> highest. `unknown` is resolved to a real level
 # via `unknown_severity` before any comparison.
 SEVERITY_ORDER = ["info", "low", "medium", "high", "critical"]
@@ -25,8 +27,16 @@ class Config:
     dedup: bool = True
     baseline: bool = False
     strict: bool = False
+    offline: bool = False
     ignore: list = field(default_factory=list)
     scanners: dict = field(default_factory=dict)
+    enrich: dict = field(default_factory=dict)   # enrich.cve_paas block
+
+    @property
+    def fail_on_exploitable(self) -> bool:
+        """Gate on real-world exploitability, independent of the severity gate."""
+        return bool(self.enrich.get("enabled") and
+                    self.enrich.get("fail_on_exploitable"))
 
     @property
     def enabled_scanners(self) -> set[str]:
@@ -72,8 +82,10 @@ def load_config(path: str = "/app/scan-config.yml") -> Config:
         dedup=bool(raw.get("dedup", True)),
         baseline=bool(raw.get("baseline", False)),
         strict=bool(raw.get("strict", False)),
+        offline=bool(raw.get("offline", False)),
         ignore=raw.get("ignore", []) or [],
         scanners=raw.get("scanners", {}) or {},
+        enrich=enrich.config_from(raw),
     )
 
     # Environment override (set via compose, e.g. ./run.sh --fail-on) is a single

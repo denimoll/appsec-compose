@@ -13,6 +13,7 @@ from pathlib import Path
 
 import baseline as bl
 import coverage as cov
+import enrich as enr
 from config import load_config
 from converters import trufflehog_json_to_sarif
 from dedup import merge
@@ -77,7 +78,23 @@ def main() -> int:
         return 2
 
     merged, stats = merge(result.findings, enabled=cfg.dedup)
-    kept, suppressed = apply_ignore(merged, cfg.ignore)
+    kept, suppressed, expired = apply_ignore(merged, cfg.ignore)
+
+    # Exploitability enrichment runs after the merge, so each CVE is looked up
+    # once and the alias set is at its widest.
+    enrichment = enr.EnrichResult(verdicts={})
+    if cfg.enrich.get("enabled"):
+        if cfg.offline:
+            enrichment.error = "skipped: offline mode is on"
+        else:
+            enrichment = enr.apply(
+                kept, cfg.enrich["url"], cfg.enrich["api_key"],
+                cfg.enrich["timeout"],
+                reprioritize=cfg.enrich["mode"] == "reprioritize")
+        if enrichment.error and cfg.strict:
+            print(f"ERROR: strict mode — CVE-PaaS enrichment failed "
+                  f"({enrichment.error})", file=sys.stderr)
+            return 2
 
     # --update-baseline: snapshot current findings as the accepted state, no gate.
     if os.environ.get("ASS_UPDATE_BASELINE") == "1":
@@ -100,8 +117,10 @@ def main() -> int:
         "policy": {
             "fail_on": policy.threshold,
             "fail_on_by_category": policy.thresholds,
+            "fail_on_exploitable": cfg.fail_on_exploitable,
             "strict": cfg.strict,
             "breaching": policy.breaching,
+            "exploitable_breaching": policy.exploitable_breaching,
             "exit_code": policy.exit_code,
         },
         "dedup": {
@@ -111,6 +130,17 @@ def main() -> int:
             "duplicates_removed": stats.removed,
         },
         "suppressed_count": len(suppressed),
+        "expired_suppressions": [{"selectors": e.label, "expires": e.expires}
+                                 for e in expired],
+        "enrichment": {
+            "enabled": bool(cfg.enrich.get("enabled")),
+            "mode": cfg.enrich.get("mode"),
+            "requested": enrichment.requested,
+            "resolved": enrichment.resolved,
+            "reprioritized": enrichment.reprioritized,
+            "exploitable": enrichment.exploitable,
+            "error": enrichment.error,
+        },
         "baseline": {
             "enabled": cfg.baseline,
             "new": len(delta.new) if delta else None,
@@ -139,7 +169,8 @@ def main() -> int:
     Path(REPORTS_DIR, "findings.json").write_text(json.dumps(consolidated, indent=2))
 
     render(result, policy, kept, stats, REPORTS_DIR,
-           suppressed_count=len(suppressed), delta=delta, coverage=coverage)
+           suppressed_count=len(suppressed), delta=delta, coverage=coverage,
+           enrichment=enrichment, expired=expired)
 
     # Console summary.
     total = sum(policy.severity_counts.values())
@@ -152,6 +183,16 @@ def main() -> int:
         print(f"  {sev:>8}: {policy.severity_counts[sev]}")
     if suppressed:
         print(f"  (suppressed by ignore rules: {len(suppressed)})")
+    for entry in expired:
+        print(f"  ! ignore rule expired {entry.expires}: {entry.label} "
+              f"— its findings count again")
+    if enrichment.error:
+        print(f"  ! CVE-PaaS enrichment unavailable: {enrichment.error}")
+    elif enrichment.requested:
+        note = (f", {enrichment.reprioritized} reprioritized"
+                if enrichment.reprioritized else "")
+        print(f"  exploitability: {enrichment.resolved}/{enrichment.requested} "
+              f"CVE(s) resolved, {enrichment.exploitable} exploitable{note}")
     if result.reports_missing:
         print(f"  ! missing reports: {', '.join(result.reports_missing)}")
     if result.reports_errored:
@@ -162,6 +203,9 @@ def main() -> int:
     if delta is not None:
         print(f"  baseline: {len(delta.new)} new, {len(delta.known)} known, "
               f"{delta.fixed} fixed")
+    if policy.exploitable_breaching:
+        print(f"  ({policy.exploitable_breaching} breaching on exploitability "
+              f"alone, below the severity threshold)")
     verdict = "FAIL" if policy.exit_code else "PASS"
     gate_scope = "new " if delta is not None else ""
     print(f"Policy fail_on={policy.label} -> {verdict} "

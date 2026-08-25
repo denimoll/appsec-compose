@@ -104,3 +104,48 @@ def test_unknown_category_is_rejected(tmp_path):
 def test_shipped_config_is_valid():
     cfg = load_config("scan-config.yml")
     assert cfg.fail_on in {"critical", "high", "medium", "low", "none"}
+
+
+# --- exploitability gate ---------------------------------------------------
+
+def exploitable(severity="low"):
+    finding = f("sca", severity)
+    finding.exploitable = True
+    return finding
+
+
+def _cfg(**kw):
+    enrich = {"enabled": True, "fail_on_exploitable": True}
+    enrich.update(kw.pop("enrich", {}))
+    return Config(enrich=enrich, **kw)
+
+
+def test_exploitable_findings_breach_below_the_severity_threshold():
+    r = evaluate([exploitable("low")], _cfg(fail_on="critical"))
+    assert r.breaching == 1 and r.exit_code == 1
+    assert r.exploitable_breaching == 1
+    assert "exploitable" in r.label
+
+
+def test_exploitability_gate_works_with_sca_reporting_only():
+    """The point of the feature: stop gating on CVSS, still fail on real exploits."""
+    cfg = _cfg(fail_on="high", fail_on_by_category={"sca": "none"})
+    theoretical = f("sca", "critical")           # high CVSS, no known exploit
+    r = evaluate([theoretical, exploitable("info")], cfg)
+    assert r.breaching == 1 and r.exploitable_breaching == 1
+
+
+def test_a_finding_over_the_threshold_is_not_double_counted_as_exploitable():
+    r = evaluate([exploitable("critical")], _cfg(fail_on="high"))
+    assert r.breaching == 1 and r.exploitable_breaching == 0
+
+
+def test_the_exploitability_gate_is_off_unless_enrichment_is_enabled():
+    cfg = Config(fail_on="critical",
+                 enrich={"enabled": False, "fail_on_exploitable": True})
+    assert evaluate([exploitable("low")], cfg).breaching == 0
+
+
+def test_exploitability_alone_never_fails_when_not_configured():
+    r = evaluate([exploitable("low")], Config(fail_on="critical"))
+    assert r.breaching == 0 and "exploitable" not in r.label

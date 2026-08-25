@@ -26,7 +26,8 @@ except ImportError:
     sys.exit("PyYAML is required on the host: pip3 install pyyaml")
 
 ROOT = Path(__file__).resolve().parent.parent
-CFG = ROOT / "scan-config.yml"
+# ASS_CONFIG_FILE (./run.sh --config) lets one clone drive several projects.
+CFG = Path(os.environ.get("ASS_CONFIG_FILE") or ROOT / "scan-config.yml")
 LOCK = ROOT / "image-digests.lock"
 
 # tool -> (docker repo, default version, env-var prefix)

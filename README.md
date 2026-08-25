@@ -181,6 +181,54 @@ than counting as "0 findings" — when either:
 Off by default, since a flaky engine then breaks the build rather than degrading
 the scan.
 
+## Exploitability (CVE-PaaS)
+
+A CVSS score says how bad a vulnerability would be. It does not say whether
+anyone is exploiting it — which is why a CVSS-only gate fires on dozens of
+theoretical "high" findings and teams learn to ignore the report.
+
+Point the collector at a [CVE-PaaS](https://github.com/denimoll/CVE-PaaS)
+instance and every SCA finding carrying a CVE gains the other half of the
+picture: CISA KEV listing, EPSS score, public PoC, Nuclei template.
+
+```yaml
+enrich:
+  cve_paas:
+    enabled: true
+    url: "http://host.docker.internal:8000"
+    api_key_env: CVE_PAAS_API_KEY   # env var name; the key is never in this file
+    mode: annotate                  # or: reprioritize
+    fail_on_exploitable: false
+```
+
+- **`annotate`** (default) leaves severity exactly as the scanner reported it
+  and adds `priority`, `epss`, `kev`, `poc` to each finding, the console line,
+  both summaries and `findings.json`. Nothing about your existing gate changes.
+- **`reprioritize`** lets the CVE-PaaS priority replace `severity`, keeping the
+  scanner's own in `scanner_severity`. Counts, baseline fingerprints and the
+  gate all follow the new value, so expect existing projects to shift.
+
+`fail_on_exploitable: true` adds a gate that is independent of severity: fail on
+anything with a KEV listing, a public PoC or a Nuclei template, whatever its
+CVSS. Combined with a relaxed severity gate this is the useful shape:
+
+```yaml
+fail_on:
+  sca: none          # stop failing on theoretical CVSS
+enrich:
+  cve_paas:
+    fail_on_exploitable: true    # fail on what is actually being exploited
+```
+
+Lookups are batched 50 at a time and CVE-PaaS caches them, so repeat runs are
+cheap. If the service is unreachable the scan continues on the scanners' own
+severities and says so; under `strict: true` that becomes a failure instead.
+The check is skipped in `offline` mode.
+
+> Only SCA findings that carry a CVE id are affected — SAST, secrets and IaC
+> keep the scanners' severities, and a finding known only by a GHSA with no CVE
+> alias cannot be looked up.
+
 ## SCA coverage check
 
 The most dangerous result a dependency scanner can produce is *nothing*: an
@@ -307,6 +355,39 @@ ignore:
 
 Suppressed findings are excluded from `fail_on` but recorded in `findings.json`
 under `suppressed` (with the reason) for the audit trail.
+
+Add `expires:` to make an acceptance temporary — an accepted risk should be
+re-argued, not inherited by whoever maintains the repo in two years:
+
+```yaml
+ignore:
+  - rule: CVE-2018-1000656
+    reason: "no fix available, mitigated at the proxy"
+    expires: 2026-12-01
+```
+
+Past that date the entry stops suppressing anything, its findings count towards
+the gate again, and the run reports which entries lapsed (console, both
+summaries, and `expired_suppressions` in `findings.json`).
+
+## Scanning several projects from one clone
+
+State can live outside the tool directory, so one checkout can serve many
+projects:
+
+```bash
+./run.sh /src/api   --name api   --config profiles/api.yml \
+                    --reports /var/appsec/api   --baseline /var/appsec/api/baseline.json
+./run.sh /src/front --name front --config profiles/front.yml \
+                    --reports /var/appsec/front --baseline /var/appsec/front/baseline.json
+```
+
+`--name` namespaces the containers (`COMPOSE_PROJECT_NAME`), and `cache/` stays
+shared on purpose — the vulnerability databases are the same for every project.
+
+> Run projects **sequentially**. `.env` and the generated `excludes/` still live
+> in the tool directory, so two runs started at the same time from one clone
+> would overwrite each other's rendered config.
 
 ## Baseline (gate on new findings)
 

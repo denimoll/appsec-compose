@@ -77,6 +77,14 @@ class Finding:
     tools: list[str] = field(default_factory=list)     # set on merge (provenance)
     description: str = ""              # human explanation / remediation hint
     url: str = ""                     # advisory / docs link
+    # Exploitability, filled in by enrich.py when CVE-PaaS is configured.
+    priority: str = ""                # CVE-PaaS verdict (Critical..Info/Undefined)
+    epss: float | None = None         # probability of exploitation in the wild
+    kev: bool = False                 # listed in CISA KEV
+    poc: bool = False                 # public proof of concept exists
+    nuclei: bool = False              # Nuclei template exists
+    exploitable: bool = False         # kev or poc or nuclei
+    scanner_severity: str = ""        # original severity, if reprioritized
 
     def __post_init__(self):
         if not self.tools:

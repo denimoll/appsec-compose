@@ -81,6 +81,26 @@ secrets_history_range: ""  # limit the history scan to a commit range, e.g.
 #   - .tox
 #   - .mypy_cache
 
+# ---- Exploitability enrichment ---------------------------------------
+# CVSS says how bad a vulnerability would be; it does not say whether anyone is
+# exploiting it. CVE-PaaS (https://github.com/denimoll/CVE-PaaS) answers that —
+# CISA KEV, EPSS, public PoC, Nuclei template — and returns a priority on the
+# same scale used here. Only SCA findings carrying a CVE id are affected.
+enrich:
+  cve_paas:
+    enabled: false
+    url: "http://host.docker.internal:8000"
+    api_key_env: CVE_PAAS_API_KEY   # env var holding the key; never put it here
+    mode: annotate     # annotate    = add priority/EPSS/KEV/PoC, keep severity
+                       # reprioritize = let the CVE-PaaS priority replace
+                       #                severity (the scanner's own is kept in
+                       #                `scanner_severity`)
+    timeout: 30
+    fail_on_exploitable: false      # fail on anything with a KEV listing, a
+                                    # public PoC or a Nuclei template, whatever
+                                    # its CVSS — combine with `sca: none` below
+                                    # to gate on real exploitability only.
+
 # ---- Policy (drives the CI exit code) --------------------------------
 fail_on: high              # critical | high | medium | low | none  (none = report-only)
                            # May also be a per-category map, so each practice
@@ -110,6 +130,9 @@ ignore: []
 # ignore:
 #   - rule: CVE-2018-1000656            # accept a specific vuln
 #     reason: "no fix available, mitigated at the proxy"
+#     expires: 2026-12-01               # after this date it stops suppressing
+#                                       # and the run says so — an accepted risk
+#                                       # should be re-argued, not inherited
 #   - file: "tests/**"                  # ignore everything under tests/
 #     reason: "test fixtures"
 #   - rule: "generic.*"                 # glob over rule ids

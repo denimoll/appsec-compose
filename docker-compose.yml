@@ -36,7 +36,7 @@ services:
       SEMGREP_EXCLUDES: ${SEMGREP_EXCLUDES:-}
     volumes:
       - *code-mount
-      - ./reports:/reports
+      - ${ASS_REPORTS_DIR:-./reports}:/reports
       - ./cache/semgrep:/cache/semgrep
       - ./semgrep-rules:/semgrep-rules:ro
 
@@ -66,7 +66,7 @@ services:
       DOCKER_CONFIG: /dockercfg
     volumes:
       - *code-mount
-      - ./reports:/reports
+      - ${ASS_REPORTS_DIR:-./reports}:/reports
       - ./cache/trivy:/root/.cache/trivy
       - ./.img-archive:/archive:ro
       - ${ASS_DOCKER_CONFIG:-./.img-empty}:/dockercfg:ro
@@ -87,7 +87,7 @@ services:
       GITLEAKS_LOG_OPTS: ${GITLEAKS_LOG_OPTS:-}
     volumes:
       - *code-mount
-      - ./reports:/reports
+      - ${ASS_REPORTS_DIR:-./reports}:/reports
       - ./excludes:/excludes:ro
 
   # ---- IaC (deeper policy coverage than Trivy config) -------------------
@@ -107,7 +107,7 @@ services:
       CHECKOV_SKIP_PATHS: ${CHECKOV_SKIP_PATHS:-}
     volumes:
       - *code-mount
-      - ./reports:/reports
+      - ${ASS_REPORTS_DIR:-./reports}:/reports
 
   # ---- SCA (alternative) -----------------------------------------------
   grype:
@@ -130,7 +130,7 @@ services:
       DOCKER_CONFIG: /dockercfg
     volumes:
       - *code-mount
-      - ./reports:/reports
+      - ${ASS_REPORTS_DIR:-./reports}:/reports
       - ./cache/grype:/cache/grype
       - ./.img-archive:/archive:ro
       - ${ASS_DOCKER_CONFIG:-./.img-empty}:/dockercfg:ro
@@ -147,7 +147,7 @@ services:
         > /reports/native/trufflehog.json 2>/dev/null || true
     volumes:
       - *code-mount
-      - ./reports:/reports
+      - ${ASS_REPORTS_DIR:-./reports}:/reports
       - ./excludes:/excludes:ro
 
   # ---- SBOM (alternative generator) ------------------------------------
@@ -167,7 +167,7 @@ services:
       SYFT_EXCLUDE: ${SYFT_EXCLUDE:-}
     volumes:
       - *code-mount
-      - ./reports:/reports
+      - ${ASS_REPORTS_DIR:-./reports}:/reports
       - ./.img-archive:/archive:ro
       - ${ASS_DOCKER_CONFIG:-./.img-empty}:/dockercfg:ro
 
@@ -187,7 +187,7 @@ services:
       HADOLINT_PRUNE: ${HADOLINT_PRUNE:-}
     volumes:
       - *code-mount
-      - ./reports:/reports
+      - ${ASS_REPORTS_DIR:-./reports}:/reports
 
   # ---- SCA (alternative, OSV database) ---------------------------------
   osv:
@@ -210,7 +210,7 @@ services:
       OSV_EXCLUDES: ${OSV_EXCLUDES:-}
     volumes:
       - *code-mount
-      - ./reports:/reports
+      - ${ASS_REPORTS_DIR:-./reports}:/reports
 
   # ---- Collector / orchestrator ----------------------------------------
   # run.sh invokes this with `--no-deps` after the enabled scanners finish.
@@ -233,10 +233,17 @@ services:
       ASS_ENABLED: ${ASS_ENABLED:-}
       ASS_STRICT: ${ASS_STRICT:-}
       ASS_EXCLUDES: ${ASS_EXCLUDES:-}
+      # Key for the CVE-PaaS enrichment; passed through from the host env so it
+      # never has to live in scan-config.yml.
+      CVE_PAAS_API_KEY: ${CVE_PAAS_API_KEY:-}
+    # Lets `url: http://host.docker.internal:8000` reach a CVE-PaaS running on
+    # the host from Linux too (a no-op on Docker Desktop, which already has it).
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       # Read-only code mount: the collector compares the manifests the repo
       # declares against what the SCA engines actually resolved.
       - *code-mount
-      - ./reports:/reports
-      - ./scan-config.yml:/app/scan-config.yml:ro
-      - ./appsec-baseline.json:/app/appsec-baseline.json
+      - ${ASS_REPORTS_DIR:-./reports}:/reports
+      - ${ASS_CONFIG_FILE:-./scan-config.yml}:/app/scan-config.yml:ro
+      - ${ASS_BASELINE_FILE:-./appsec-baseline.json}:/app/appsec-baseline.json
