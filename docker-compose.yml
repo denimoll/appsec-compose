@@ -18,11 +18,34 @@ x-code-mount: &code-mount
   target: /code
   read_only: true
 
+# The repo in, the reports out — what every scanner needs and nothing more.
+x-scan-volumes: &scan-volumes
+  - *code-mount
+  - ${ASS_REPORTS_DIR:-./reports}:/reports
+
+# Extra mounts for the scanners that can also target a container image.
+x-image-volumes: &image-volumes
+  - *code-mount
+  - ${ASS_REPORTS_DIR:-./reports}:/reports
+  - ./.img-archive:/archive:ro
+  - ${ASS_DOCKER_CONFIG:-./.img-empty}:/dockercfg:ro
+
+# Generated per-engine exclude configs (gitleaks TOML, trufflehog regex list).
+x-exclude-volumes: &exclude-volumes
+  - *code-mount
+  - ${ASS_REPORTS_DIR:-./reports}:/reports
+  - ./excludes:/excludes:ro
+
+# Every scanner runs one shot through a shell and must exit 0: findings are the
+# collector's business, so a noisy engine never breaks the scan phase.
+x-sh: &sh
+  entrypoint: ["/bin/sh", "-c"]
+
 services:
   # ---- SAST -------------------------------------------------------------
   semgrep:
     image: ${SEMGREP_IMAGE:-semgrep/semgrep:1.174.0}
-    entrypoint: ["/bin/sh", "-c"]
+    <<: *sh
     # SEMGREP_CONFIGS = one or more `--config <ref>` built by render-env from
     # scan-config.yml (default pack, custom registry refs, `auto` stack-detect,
     # and the local ./semgrep-rules drop-in dir mounted at /semgrep-rules).
@@ -45,7 +68,7 @@ services:
   # (./run.sh --image <ref>). SBOM formats are controlled by ASS_SBOM_CDX/SPDX.
   trivy:
     image: ${TRIVY_IMAGE:-aquasec/trivy:0.74.0}
-    entrypoint: ["/bin/sh", "-c"]
+    <<: *sh
     command:
       - |
         set -f
@@ -74,9 +97,11 @@ services:
   # ---- Secrets ----------------------------------------------------------
   gitleaks:
     image: ${GITLEAKS_IMAGE:-zricethezav/gitleaks:v8.30.1}
-    entrypoint: ["/bin/sh", "-c"]
+    <<: *sh
     # GITLEAKS_CMD = "dir" (working tree only, default) or "git" to scan the
     # git history (needs a .git in the repo). --exit-code 0 keeps it green.
+    # Do not go back to `detect`: it survives as a deprecated alias that exits 0
+    # and writes an empty report, i.e. it silently finds nothing.
     command:
       - >-
         set -f;
@@ -85,15 +110,12 @@ services:
     environment:
       GITLEAKS_CMD: ${GITLEAKS_CMD:-dir}
       GITLEAKS_LOG_OPTS: ${GITLEAKS_LOG_OPTS:-}
-    volumes:
-      - *code-mount
-      - ${ASS_REPORTS_DIR:-./reports}:/reports
-      - ./excludes:/excludes:ro
+    volumes: *exclude-volumes
 
   # ---- IaC (deeper policy coverage than Trivy config) -------------------
   checkov:
     image: ${CHECKOV_IMAGE:-bridgecrew/checkov:3.3.13}
-    entrypoint: ["/bin/sh", "-c"]
+    <<: *sh
     # checkov prints an ASCII banner to stdout, so we can't redirect stdout to
     # the report. Write to a dir (clean `results_sarif.sarif`) and rename it.
     command:
@@ -105,9 +127,7 @@ services:
         rm -rf /reports/native/_checkov
     environment:
       CHECKOV_SKIP_PATHS: ${CHECKOV_SKIP_PATHS:-}
-    volumes:
-      - *code-mount
-      - ${ASS_REPORTS_DIR:-./reports}:/reports
+    volumes: *scan-volumes
 
   # ---- SCA (alternative) -----------------------------------------------
   grype:
@@ -138,17 +158,14 @@ services:
   # ---- Secrets (alternative) -------------------------------------------
   trufflehog:
     image: ${TRUFFLEHOG_IMAGE:-trufflesecurity/trufflehog:3.97.0}
-    entrypoint: ["/bin/sh", "-c"]
+    <<: *sh
     # TruffleHog has no SARIF output; it emits JSON lines. We keep the raw JSON
     # as the native report and the collector generates trufflehog.sarif from it.
     command:
       - >-
         trufflehog filesystem /code --json --no-update -x /excludes/trufflehog.txt
         > /reports/native/trufflehog.json 2>/dev/null || true
-    volumes:
-      - *code-mount
-      - ${ASS_REPORTS_DIR:-./reports}:/reports
-      - ./excludes:/excludes:ro
+    volumes: *exclude-volumes
 
   # ---- SBOM (alternative generator) ------------------------------------
   # Emits both CycloneDX and SPDX. Target is dir:/code or a container image.
@@ -165,16 +182,12 @@ services:
     environment:
       DOCKER_CONFIG: /dockercfg
       SYFT_EXCLUDE: ${SYFT_EXCLUDE:-}
-    volumes:
-      - *code-mount
-      - ${ASS_REPORTS_DIR:-./reports}:/reports
-      - ./.img-archive:/archive:ro
-      - ${ASS_DOCKER_CONFIG:-./.img-empty}:/dockercfg:ro
+    volumes: *image-volumes
 
   # ---- IaC (Dockerfile lint) -------------------------------------------
   hadolint:
     image: ${HADOLINT_IMAGE:-hadolint/hadolint:v2.15.1-alpine}
-    entrypoint: ["/bin/sh", "-c"]
+    <<: *sh
     # Lint every Dockerfile in the repo; --no-fail keeps the container green.
     # Empty SARIF when none are found.
     command:
@@ -185,14 +198,12 @@ services:
         else printf '{"version":"2.1.0","runs":[{"tool":{"driver":{"name":"Hadolint"}},"results":[]}]}' > /reports/native/hadolint.sarif; fi
     environment:
       HADOLINT_PRUNE: ${HADOLINT_PRUNE:-}
-    volumes:
-      - *code-mount
-      - ${ASS_REPORTS_DIR:-./reports}:/reports
+    volumes: *scan-volumes
 
   # ---- SCA (alternative, OSV database) ---------------------------------
   osv:
     image: ${OSV_IMAGE:-ghcr.io/google/osv-scanner:v2.5.1}
-    entrypoint: ["/bin/sh", "-c"]
+    <<: *sh
     # OSV ruleId is the CVE, so findings de-duplicate against Trivy/Grype.
     # Needs network (queries the OSV database); not for offline mode.
     # A repo with no dependency manifests makes osv-scanner exit without writing
@@ -208,9 +219,7 @@ services:
         > /reports/native/osv.sarif
     environment:
       OSV_EXCLUDES: ${OSV_EXCLUDES:-}
-    volumes:
-      - *code-mount
-      - ${ASS_REPORTS_DIR:-./reports}:/reports
+    volumes: *scan-volumes
 
   # ---- Collector / orchestrator ----------------------------------------
   # run.sh invokes this with `--no-deps` after the enabled scanners finish.
@@ -236,6 +245,9 @@ services:
       # Key for the CVE-PaaS enrichment; passed through from the host env so it
       # never has to live in scan-config.yml.
       CVE_PAAS_API_KEY: ${CVE_PAAS_API_KEY:-}
+      ASS_VERSION: ${ASS_VERSION:-}
+      ASS_ENGINE_IMAGES: ${ASS_ENGINE_IMAGES:-}
+      ASS_DB_DATES: ${ASS_DB_DATES:-}
     # Lets `url: http://host.docker.internal:8000` reach a CVE-PaaS running on
     # the host from Linux too (a no-op on Docker Desktop, which already has it).
     extra_hosts:

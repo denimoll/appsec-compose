@@ -104,3 +104,12 @@ def test_shipped_defaults_keep_one_engine_per_category_enabled(renv):
     cfg = yaml.safe_load((ROOT / "scan-config.yml").read_text())
     enabled = {n for n, c in cfg["scanners"].items() if (c or {}).get("enabled")}
     assert enabled == {"semgrep", "trivy", "gitleaks", "checkov"}
+
+
+def test_smoke_test_fixture_exercises_every_category(renv):
+    """The fixture must keep tripping each engine, or the smoke test proves nothing."""
+    fixture = ROOT / "tests" / "fixtures" / "vulnerable-repo"
+    present = {p.name for p in fixture.rglob("*")}
+    assert {"Dockerfile", "requirements.txt", "app.py", "config.env"} <= present
+    reqs = (fixture / "requirements.txt").read_text()
+    assert "==" in reqs, "dependencies must be pinned or SCA resolves nothing"

@@ -15,6 +15,7 @@ form (consumed by pin.sh).
 """
 from __future__ import annotations
 
+import json
 import os
 import re
 import sys
@@ -25,7 +26,18 @@ try:
 except ImportError:
     sys.exit("PyYAML is required on the host: pip3 install pyyaml")
 
+
+def _load_schema():
+    """The collector owns the schema; load it by path so there is one copy."""
+    import importlib.util
+    path = Path(__file__).resolve().parent.parent / "orchestrator" / "schema.py"
+    spec = importlib.util.spec_from_file_location("ass_schema", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
 ROOT = Path(__file__).resolve().parent.parent
+VERSION_FILE = ROOT / "VERSION"
 # ASS_CONFIG_FILE (./run.sh --config) lets one clone drive several projects.
 CFG = Path(os.environ.get("ASS_CONFIG_FILE") or ROOT / "scan-config.yml")
 LOCK = ROOT / "image-digests.lock"
@@ -217,6 +229,35 @@ def _image_ref(repo: str, ver: str) -> str:
     return f"{repo}:{ver}"
 
 
+def _version() -> str:
+    try:
+        return VERSION_FILE.read_text().strip()
+    except OSError:
+        return "unknown"
+
+
+def _db_dates() -> dict[str, str]:
+    """When each vulnerability database was last refreshed.
+
+    A scan is only as current as its DB, so the report should say how old it
+    was — a clean result from a three-week-old database is not a clean result.
+    """
+    dates: dict[str, str] = {}
+    trivy = ROOT / "cache" / "trivy" / "db" / "metadata.json"
+    try:
+        dates["trivy"] = json.loads(trivy.read_text())["UpdatedAt"]
+    except (OSError, KeyError, ValueError):
+        pass
+    for meta in sorted((ROOT / "cache" / "grype").glob("*/metadata.json")):
+        try:
+            built = json.loads(meta.read_text()).get("built")
+            if built:
+                dates["grype"] = built
+        except (OSError, ValueError):
+            pass
+    return dates
+
+
 def _load_lock() -> dict[str, str]:
     """Map `repo:tag` -> `repo@sha256:...` from image-digests.lock."""
     pins: dict[str, str] = {}
@@ -238,6 +279,12 @@ def _is_pinned(env: dict[str, str], prefix: str, pins: dict[str, str]) -> bool:
 
 def main() -> int:
     cfg = yaml.safe_load(CFG.read_text()) or {}
+    # Fail on the host, before a single container starts, and name every problem.
+    try:
+        _load_schema().check(cfg, known_scanners=set(TOOLS))
+    except ValueError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 2
     scanners = cfg.get("scanners", {}) or {}
     offline = bool(cfg.get("offline", False))
     pins = _load_lock()
@@ -304,6 +351,13 @@ def main() -> int:
         "ASS_TAGREFS": " ".join(env[f"{p}_TAGREF"] for _, _, p in TOOLS.values()),
     })
     env.update(_exclude_flags(excludes))
+
+    # Provenance: what produced this report, so it can be audited and reproduced.
+    env["ASS_VERSION"] = _version()
+    env["ASS_ENGINE_IMAGES"] = json.dumps(
+        {tool: env[f"{TOOLS[tool][2]}_IMAGE"] for tool in enabled if tool in TOOLS},
+        separators=(",", ":"))
+    env["ASS_DB_DATES"] = json.dumps(_db_dates(), separators=(",", ":"))
     # The collector prunes its manifest walk with the same list.
     env["ASS_EXCLUDES"] = " ".join(str(e).strip().strip("/") for e in excludes
                                    if str(e).strip())

@@ -30,6 +30,12 @@
   lookup adds KEV / EPSS / PoC / Nuclei data to SCA findings, in `annotate` or
   `reprioritize` mode, plus a `fail_on_exploitable` gate independent of CVSS.
 - **Expiring suppressions** — `expires:` on an `ignore` entry.
+- **Config schema validation** — unknown keys rejected with a suggestion,
+  before any container starts.
+- **Provenance** — tool version, resolved engine digests and DB dates in every
+  report; `./run.sh --version`.
+- **Smoke test** — `scripts/smoke-test.sh` runs the whole pipeline over a
+  vulnerable fixture and asserts every engine reported; gates CI.
 - **Multi-project primitives** — `--config`, `--baseline`, `--reports`,
   `--name` (per-run `COMPOSE_PROJECT_NAME`); `cache/` stays shared.
 - **Tests** — pytest suite over the collector, gating the CI scan job.

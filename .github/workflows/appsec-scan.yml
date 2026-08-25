@@ -26,8 +26,22 @@ jobs:
       - run: pip install -r tests/requirements.txt
       - run: python -m pytest tests/ -q
 
+  # End-to-end: the unit tests cannot see the compose wiring, and an engine
+  # whose command line breaks upstream can still exit 0 with an empty report.
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Cache scanner DBs
+        uses: actions/cache@v6
+        with:
+          path: cache
+          key: appsec-smoke-${{ runner.os }}-${{ hashFiles('scan-config.yml') }}
+          restore-keys: appsec-smoke-${{ runner.os }}-
+      - run: ./scripts/smoke-test.sh
+
   scan:
-    needs: test
+    needs: [test, smoke]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5

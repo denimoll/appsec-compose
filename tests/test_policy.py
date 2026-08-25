@@ -96,8 +96,8 @@ def test_invalid_level_is_rejected(tmp_path):
         load_config(_write(tmp_path, "fail_on: catastrophic\n"))
 
 
-def test_unknown_category_is_rejected(tmp_path):
-    with pytest.raises(ValueError, match="Unknown fail_on category"):
+def test_unknown_category_is_rejected_with_a_suggestion(tmp_path):
+    with pytest.raises(ValueError, match=r"fail_on: unknown key 'secret'.*'secrets'"):
         load_config(_write(tmp_path, "fail_on:\n  secret: low\n"))
 
 

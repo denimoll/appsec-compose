@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 import baseline as bl
@@ -26,6 +27,27 @@ REPORTS_DIR = "/reports"
 NATIVE_DIR = f"{REPORTS_DIR}/native"
 CODE_DIR = "/code"
 BASELINE_PATH = "/app/appsec-baseline.json"
+
+
+def _provenance(cfg, image_mode: bool) -> dict:
+    """What produced this report — the engines, their DBs, and the target."""
+    def _json_env(name: str) -> dict:
+        try:
+            return json.loads(os.environ.get(name) or "{}")
+        except json.JSONDecodeError:
+            return {}
+
+    target = (os.environ.get("ASS_IMAGE")
+              or ("docker-archive" if os.environ.get("ASS_IMAGE_TAR") else "")
+              or "filesystem")
+    return {
+        "appsec_compose": os.environ.get("ASS_VERSION", "unknown"),
+        "generated": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "target": target if image_mode else "filesystem",
+        "offline": cfg.offline,
+        "engines": _json_env("ASS_ENGINE_IMAGES"),
+        "databases": _json_env("ASS_DB_DATES"),
+    }
 
 
 def main() -> int:
@@ -114,6 +136,7 @@ def main() -> int:
 
     # Machine-readable consolidated output (for ASPM/ASOC ingestion).
     consolidated = {
+        "provenance": _provenance(cfg, image_mode),
         "policy": {
             "fail_on": policy.threshold,
             "fail_on_by_category": policy.thresholds,
@@ -168,13 +191,17 @@ def main() -> int:
     }
     Path(REPORTS_DIR, "findings.json").write_text(json.dumps(consolidated, indent=2))
 
+    provenance = consolidated["provenance"]
     render(result, policy, kept, stats, REPORTS_DIR,
            suppressed_count=len(suppressed), delta=delta, coverage=coverage,
-           enrichment=enrichment, expired=expired)
+           enrichment=enrichment, expired=expired, provenance=provenance)
 
     # Console summary.
     total = sum(policy.severity_counts.values())
     print("=" * 60)
+    version = os.environ.get("ASS_VERSION", "")
+    if version:
+        print(f"appsec-compose {version}")
     dup_note = (f" ({stats.removed} duplicate(s) merged)"
                 if cfg.dedup and stats.removed else "")
     print(f"appsec-compose: {total} unique finding(s) across "

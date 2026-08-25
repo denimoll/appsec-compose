@@ -75,6 +75,17 @@ _Exploitability: {{ enrichment.resolved }}/{{ enrichment.requested }} CVE(s) res
 {% for f in top_findings %}| {{ f.severity }}{% if f.is_new %} 🆕{% endif %} | {% if f.kev %}KEV{% elif f.poc %}PoC{% elif f.nuclei %}nuclei{% elif f.epss is not none %}EPSS {{ "%.2f" | format(f.epss) }}{% else %}—{% endif %} | {{ f.tools | join(", ") }} | {{ f.category }} | `{{ f.rule_id }}`{% if f.url %} [↗]({{ f.url }}){% endif %} | {{ f.file }}{% if f.line %}:{{ f.line }}{% endif %} |
 {% endfor %}{% else %}_No findings._
 {% endif %}
+## Provenance
+
+_appsec-compose {{ provenance.appsec_compose }} · {{ provenance.target }} target{% if provenance.offline %} · offline{% endif %}_
+
+{% for tool, ref in provenance.engines.items() %}- **{{ tool }}**: `{{ ref }}`
+{% endfor %}
+{% if provenance.databases %}
+{% for db, date in provenance.databases.items() %}- {{ db }} database updated {{ date }}
+{% endfor %}
+{% endif %}
+
 > Native reports per tool are in `reports/native/`.
 """
 
@@ -173,7 +184,7 @@ _HTML_TEMPLATE = """<!doctype html>
 </style></head><body>
 <header><div class="wrap">
   <div class="brand"><span class="dot"></span>appsec-compose</div>
-  <div class="sub">Generated {{ generated }} UTC &middot; policy fail_on = {{ policy.label }}{% if stats.removed %} &middot; {{ total }} unique of {{ stats.raw }} ({{ stats.removed }} merged){% endif %}{% if suppressed_count %} &middot; {{ suppressed_count }} suppressed{% endif %}{% if delta %} &middot; {{ delta.new | length }} new / {{ delta.known | length }} known / {{ delta.fixed }} fixed{% endif %}{% if enrichment and enrichment.exploitable %} &middot; {{ enrichment.exploitable }} exploitable{% endif %}</div>
+  <div class="sub">appsec-compose {{ provenance.appsec_compose }} &middot; generated {{ generated }} UTC &middot; policy fail_on = {{ policy.label }}{% if stats.removed %} &middot; {{ total }} unique of {{ stats.raw }} ({{ stats.removed }} merged){% endif %}{% if suppressed_count %} &middot; {{ suppressed_count }} suppressed{% endif %}{% if delta %} &middot; {{ delta.new | length }} new / {{ delta.known | length }} known / {{ delta.fixed }} fixed{% endif %}{% if enrichment and enrichment.exploitable %} &middot; {{ enrichment.exploitable }} exploitable{% endif %}</div>
   <div class="pill {{ 'fail' if policy.exit_code else 'pass' }}">
     <span class="big">{{ '✗' if policy.exit_code else '✓' }} {{ verdict }}</span>
     &middot; {{ policy.breaching }} at/above threshold
@@ -309,7 +320,8 @@ def _sort_findings(findings: list[Finding]) -> list[Finding]:
 
 def _context(result: ScanResult, policy: PolicyResult, findings: list[Finding],
              stats: DedupStats, suppressed_count: int, delta,
-             coverage=None, enrichment=None, expired=None) -> dict:
+             coverage=None, enrichment=None, expired=None,
+             provenance=None) -> dict:
     total = sum(policy.severity_counts.values())
     top = _sort_findings(findings)[:_TOP_N]
     # Filter chips are derived from the rows actually shown, so a filter can
@@ -325,6 +337,7 @@ def _context(result: ScanResult, policy: PolicyResult, findings: list[Finding],
         "coverage": coverage,
         "enrichment": enrichment,
         "expired": expired or [],
+        "provenance": provenance or {},
         "verdict": "FAIL" if policy.exit_code else "PASS",
         "sev_order": _DISPLAY_ORDER,
         "total": total,
@@ -343,10 +356,10 @@ def _context(result: ScanResult, policy: PolicyResult, findings: list[Finding],
 def render(result: ScanResult, policy: PolicyResult, findings: list[Finding],
            stats: DedupStats, out_dir: str = "/reports",
            suppressed_count: int = 0, delta=None, coverage=None,
-           enrichment=None, expired=None) -> None:
+           enrichment=None, expired=None, provenance=None) -> None:
     env = Environment(autoescape=False, trim_blocks=True, lstrip_blocks=True)
     ctx = _context(result, policy, findings, stats, suppressed_count, delta,
-                   coverage, enrichment, expired)
+                   coverage, enrichment, expired, provenance)
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
     (out / "summary.md").write_text(env.from_string(_MD_TEMPLATE).render(**ctx))

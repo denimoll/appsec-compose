@@ -42,6 +42,28 @@ while [[ $# -gt 0 ]]; do
     --strict) export ASS_STRICT=1; shift ;;
     --require-pinned) export ASS_REQUIRE_PINNED=1; shift ;;
     --update-baseline) export ASS_UPDATE_BASELINE=1; shift ;;
+    -v|--version)
+      here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+      echo "appsec-compose $(cat "$here/VERSION" 2>/dev/null || echo unknown)"
+      # Re-render so the refs shown are the ones a scan would actually use.
+      python3 "$here/scripts/render-env.py" >/dev/null 2>&1 || true
+      python3 - "$here/.env" <<'PYEOF'
+import re, sys
+try:
+    lines = open(sys.argv[1]).read().splitlines()
+except OSError:
+    sys.exit("  (could not resolve engine versions)")
+# ASS_* are runtime settings, not engines.
+found = False
+for line in lines:
+    m = re.match(r"^(?!ASS_)([A-Z]+)_IMAGE='(.*)'$", line)
+    if m:
+        found = True
+        print(f"  {m.group(1).lower()}: {m.group(2)}")
+if not found:
+    print("  (no engines resolved)")
+PYEOF
+      exit 0 ;;
     -h|--help) usage ;;
     -*) echo "Unknown argument: $1" >&2; usage ;;
     *) TARGET="$1"; shift ;;

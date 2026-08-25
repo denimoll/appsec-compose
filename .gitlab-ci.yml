@@ -6,9 +6,23 @@
 # `volumes = ["/var/run/docker.sock:/var/run/docker.sock", "/builds:/builds"]`,
 # or a shell runner with Docker installed). Plain dind will NOT work, because
 # the dind daemon cannot see $CI_PROJECT_DIR.
-appsec-compose:
+
+stages: [test, scan]
+
+# The collector decides what merges, what is suppressed and whether the build
+# fails, so its logic is tested before it is trusted to gate anything.
+appsec-compose:tests:
   stage: test
+  image: python:3.14-slim
+  before_script:
+    - pip install --no-cache-dir -r tests/requirements.txt
+  script:
+    - python -m pytest tests/ -q
+
+appsec-compose:
+  stage: scan
   image: docker:29
+  needs: ["appsec-compose:tests"]
   variables:
     DOCKER_HOST: unix:///var/run/docker.sock
   before_script:
@@ -26,7 +40,14 @@ appsec-compose:
     when: always
     paths:
       - reports/
-    # GitLab ingests CycloneDX SBOMs natively from the Dependency Scanning slot:
     reports:
+      # GitLab ingests these natively: the SBOM feeds Dependency Scanning and
+      # the SAST/secret SARIF feed the corresponding security dashboards.
       cyclonedx:
         - reports/sbom.trivy.cdx.json
+      sast:
+        - reports/native/semgrep.sarif
+      secret_detection:
+        - reports/native/gitleaks.sarif
+      dependency_scanning:
+        - reports/native/trivy-fs.sarif

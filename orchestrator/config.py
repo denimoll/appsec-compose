@@ -8,6 +8,7 @@ from pathlib import Path
 import yaml
 
 import enrich
+import schema
 
 # Severity ordering, lowest -> highest. `unknown` is resolved to a real level
 # via `unknown_severity` before any comparison.
@@ -73,6 +74,7 @@ def load_config(path: str = "/app/scan-config.yml") -> Config:
     if p.exists():
         raw = yaml.safe_load(p.read_text()) or {}
 
+    schema.check(raw)
     fail_on, per_category = _parse_fail_on(raw.get("fail_on", "high"))
 
     cfg = Config(

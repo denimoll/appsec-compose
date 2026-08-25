@@ -294,6 +294,21 @@ table with **category filters**, expandable **details** (description + advisory
 link per finding), and — in baseline mode — a **NEW** flag on findings added
 since the accepted snapshot. It is fully self-contained (no external assets).
 
+## Provenance
+
+Every report records what produced it — the appsec-compose version, each
+engine's resolved image ref (the immutable digest when pinned), the
+vulnerability-database dates, and whether the scan ran offline. A clean result
+from a three-week-old database is not the same as a clean result, and an
+artifact heading into an ASPM should say which tool version produced it.
+
+It lands in `findings.json` under `provenance` and at the foot of both
+summaries. To see the resolved engines without running a scan:
+
+```bash
+./run.sh --version
+```
+
 ## Policy / exit codes
 
 The **collector** decides pass/fail: exit `1` if any finding is at or above
@@ -476,5 +491,31 @@ python3 -m pip install -r tests/requirements.txt
 python3 -m pytest tests/ -q
 ```
 
-They run on every push in [`appsec-scan.yml`](.github/workflows/appsec-scan.yml)
+Unit tests cannot see the compose wiring, though, and every engine is invoked
+through a shell command line that upstream can change underneath us. Gitleaks,
+for instance, kept `detect` as a deprecated alias that exits `0` and writes a
+valid but **empty** report — so the scan would have gone on reporting zero
+secrets, and even `strict` would have been satisfied. The smoke test runs the
+whole pipeline over a deliberately vulnerable fixture and asserts that each
+engine found the thing planted for it:
+
+```bash
+./scripts/smoke-test.sh      # needs Docker; ~2 min
+```
+
+Both run on every push in [`appsec-scan.yml`](.github/workflows/appsec-scan.yml),
 and the scan job depends on them.
+
+## Configuration errors
+
+Unknown keys are rejected before a single container starts, with a suggestion:
+
+```
+ERROR: invalid scan-config.yml:
+  scan-config.yml: unknown key 'fail_on_severity' — did you mean 'fail_on'?
+  scan-config.yml: unknown key 'strickt' — did you mean 'strict'?
+```
+
+A mistyped key used to be ignored in silence, which meant the gate quietly ran
+at its default while the config said otherwise. Every problem in the file is
+reported at once.
