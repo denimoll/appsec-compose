@@ -19,7 +19,7 @@ from config import load_config
 from converters import trufflehog_json_to_sarif
 from dedup import merge
 from normalize import load_findings, finding_to_dict, expected_reports
-from policy import evaluate
+from policy import evaluate, resolve_unknown
 from summary import render
 from suppress import apply as apply_ignore
 
@@ -98,6 +98,10 @@ def main() -> int:
             print(f"ERROR: strict mode — {warning.message} {warning.advice}",
                   file=sys.stderr)
         return 2
+
+    # Tools that could not determine a severity are ranked by the user's
+    # `unknown_severity`, before anything merges or compares them.
+    unknown_count = resolve_unknown(result.findings, cfg.unknown_severity)
 
     merged, stats = merge(result.findings, enabled=cfg.dedup)
     kept, suppressed, expired = apply_ignore(merged, cfg.ignore)
@@ -208,6 +212,9 @@ def main() -> int:
           f"{len(result.reports_found)} report(s){dup_note}")
     for sev in ["critical", "high", "medium", "low", "info"]:
         print(f"  {sev:>8}: {policy.severity_counts[sev]}")
+    if unknown_count:
+        print(f"  ({unknown_count} finding(s) of undetermined severity ranked as "
+              f"{cfg.unknown_severity})")
     if suppressed:
         print(f"  (suppressed by ignore rules: {len(suppressed)})")
     for entry in expired:

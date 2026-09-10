@@ -62,6 +62,14 @@ _CATEGORY_FLOOR = {
 
 _SEVERITY_RANK = {"info": 0, "low": 1, "medium": 2, "high": 3, "critical": 4}
 
+# A tool's own severity word, when it states one in the rule's SARIF tags.
+# "unknown" is deliberately not a real level: the collector resolves it through
+# the `unknown_severity` setting before anything ranks or compares it.
+_TOOL_SEVERITY_WORDS = {
+    "CRITICAL": "critical", "HIGH": "high", "MEDIUM": "medium",
+    "LOW": "low", "INFO": "info", "NONE": "info", "UNKNOWN": "unknown",
+}
+
 
 @dataclass
 class Finding:
@@ -91,10 +99,12 @@ class Finding:
             self.tools = [self.tool]
 
 
-# Grype severity strings -> our scale.
+# Grype severity strings -> our scale. "negligible" is a real verdict and maps
+# to info; "unknown" is the absence of one, so it goes through the same
+# `unknown_severity` resolution as every other tool's undetermined finding.
 _GRYPE_SEVERITY = {
     "critical": "critical", "high": "high", "medium": "medium",
-    "low": "low", "negligible": "info", "unknown": "info",
+    "low": "low", "negligible": "info", "unknown": "unknown",
 }
 
 
@@ -112,6 +122,26 @@ def _severity_from_cvss(score: float) -> str:
 
 def _max_severity(a: str, b: str) -> str:
     return a if _SEVERITY_RANK[a] >= _SEVERITY_RANK[b] else b
+
+
+def _tool_severity(rule: dict) -> str | None:
+    """The severity the tool itself assigned, if the report states it.
+
+    This has to outrank the raw CVSS score, because the two genuinely disagree
+    and the tool's verdict is the better answer. Trivy resolves severity
+    through the vendor that owns the advisory (`SeveritySource`: ghsa, redhat,
+    debian, …), and an advisory routinely carries a CVSS vector that its own
+    maintainers consider unrepresentative — GHSA-63hf-3vf5-4wqf (CVE-2026-34520
+    in aiohttp) is scored LOW by GitHub while carrying a CVSS v3 vector worth
+    9.1. Reading the number instead of the verdict turned that into the single
+    "critical" finding of a report, contradicting the native output we ship
+    alongside it.
+    """
+    for tag in (rule.get("properties") or {}).get("tags") or []:
+        word = _TOOL_SEVERITY_WORDS.get(str(tag).strip().upper())
+        if word:
+            return word
+    return None
 
 
 def _security_severity(props: dict) -> str | None:
@@ -184,15 +214,21 @@ def _parse_sarif(path: Path, tool: str, category: str) -> list[Finding]:
             rule_id = res.get("ruleId") or res.get("ruleIndex") or "unknown"
             rule = rules.get(rule_id, {})
 
-            # Severity: prefer CVSS from result, then rule, then SARIF level.
+            # Severity: the tool's own verdict first, then CVSS from the result
+            # or the rule, then the coarse SARIF level. CVSS is a fallback, not
+            # an override — see _tool_severity.
             sev = (
-                _security_severity(res.get("properties") or {})
+                _tool_severity(rule)
+                or _security_severity(res.get("properties") or {})
                 or _security_severity(rule.get("properties") or {})
                 or _LEVEL_TO_SEVERITY.get(res.get("level", "warning"), "medium")
             )
             floor = _CATEGORY_FLOOR.get(category)
             if floor:
-                sev = _max_severity(sev, floor)
+                # A secret whose severity the tool could not determine is still
+                # a secret, so the floor applies rather than the fallback level.
+                sev = (_max_severity(sev, floor) if sev in _SEVERITY_RANK
+                       else floor)
 
             msg = ((res.get("message") or {}).get("text") or "").strip()
 
@@ -235,7 +271,7 @@ def _parse_grype_json(path: Path, tool: str, category: str) -> list[Finding]:
     for match in data.get("matches", []) or []:
         vuln = match.get("vulnerability") or {}
         vid = vuln.get("id", "unknown")
-        sev = _GRYPE_SEVERITY.get(str(vuln.get("severity", "")).lower(), "info")
+        sev = _GRYPE_SEVERITY.get(str(vuln.get("severity", "")).lower(), "unknown")
 
         aliases = [r.get("id") for r in match.get("relatedVulnerabilities", [])
                    if r.get("id")]

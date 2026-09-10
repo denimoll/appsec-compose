@@ -334,6 +334,26 @@ Ready-to-use templates are included:
 - **Publish the collector image** — [`.github/workflows/publish-collector.yml`](.github/workflows/publish-collector.yml)
   pushes the collector to GHCR on release, so CI can skip the local build.
 
+## Severity
+
+A finding keeps the severity **its own tool assigned**. Where a report states
+one (Trivy tags every rule with its verdict), that wins; only when a tool states
+none — OSV-Scanner levels every result the same, so its CVSS score is the only
+gradation available — is severity derived from CVSS, and the coarse SARIF level
+is the last resort.
+
+That order matters, because a CVSS score and an advisory's own rating routinely
+disagree. `CVE-2026-34520` in aiohttp is rated **LOW** by GitHub, who own the
+advisory, while the CVSS v3 vector it carries scores **9.1**. Trivy follows the
+advisory (`SeveritySource: ghsa`) and reports LOW; reading the number instead
+made it the single "critical" line of a report, contradicting the native output
+shipped beside it.
+
+Severities a tool could not determine are ranked by `unknown_severity` rather
+than quietly treated as informational — Trivy emits those with a CVSS of `0.0`,
+which is not the same claim as "harmless". Secrets keep their floor regardless:
+a credential nobody scored is still a credential.
+
 ## De-duplication
 
 When several tools cover the same category they report the same issues. With
