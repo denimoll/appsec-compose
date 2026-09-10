@@ -349,6 +349,13 @@ advisory (`SeveritySource: ghsa`) and reports LOW; reading the number instead
 made it the single "critical" line of a report, contradicting the native output
 shipped beside it.
 
+The same rule holds across tools. When several engines report one
+vulnerability, the merged severity is the highest **among those that assigned
+one** — a score-derived level never outranks a verdict. On the example above
+Trivy and Grype both say LOW while OSV-Scanner, which states no severity of its
+own, derives critical from that 9.1; taking the loudest number would put the
+phantom critical straight back.
+
 Severities a tool could not determine are ranked by `unknown_severity` rather
 than quietly treated as informational — Trivy emits those with a CVSS of `0.0`,
 which is not the same claim as "harmless". Secrets keep their floor regardless:
@@ -370,8 +377,9 @@ the summary (the raw native reports are left untouched for ASPM import):
   Unmapped rules keep their own `(rule, file, line)` identity.
 - **SAST** — same rule at the same `(file, line)`.
 
-A merged finding keeps the highest severity, records **every tool** that
-reported it, and lists the equivalent IDs as aliases. `findings.json` reports
+A merged finding keeps the highest severity among the tools that assigned one
+(see [Severity](#severity)), records **every tool** that reported it, and lists
+the equivalent IDs as aliases. `findings.json` reports
 `raw_findings`, `unique_findings` and `duplicates_removed`. Per-tool counts
 still reflect each tool's true raw yield.
 

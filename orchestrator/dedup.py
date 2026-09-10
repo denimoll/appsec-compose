@@ -12,8 +12,10 @@ untouched for ASPM import). Dedup key depends on category:
             fall back to the same rule at the same (file, line).
 - sast    : same rule at the same (file, line).
 
-A merged finding keeps the highest severity and records every tool that
-reported it (provenance) plus the union of equivalent IDs (aliases).
+A merged finding records every tool that reported it (provenance) plus the
+union of equivalent IDs (aliases). Its severity is the highest among the tools
+that actually assigned one — a score-derived severity never outranks a verdict,
+for the same reason it does not inside a single report (see _tool_severity).
 """
 from __future__ import annotations
 
@@ -68,12 +70,19 @@ def _id_tokens(f: Finding) -> set[str]:
 
 
 def _merge_group(group: list[Finding]) -> Finding:
-    rep = max(group, key=lambda f: _SEVERITY_RANK[f.severity])
+    # Engines that stated a severity themselves decide it. OSV-Scanner reports
+    # no verdict, so its CVSS-derived level would otherwise override Trivy and
+    # Grype whenever an advisory's raw score disagrees with its own rating —
+    # re-inflating exactly what reading the verdict was meant to fix.
+    verdicts = [f for f in group if f.severity_stated]
+    ranked = verdicts or group
+
+    rep = max(ranked, key=lambda f: _SEVERITY_RANK[f.severity])
     tools = sorted({t for f in group for t in f.tools})
     ids = sorted({t for f in group for t in _id_tokens(f)})
 
     severity = "info"
-    for f in group:
+    for f in ranked:
         severity = _max_severity(severity, f.severity)
 
     # Prefer a CVE id as the canonical rule_id for readability/ASPM matching.
@@ -87,6 +96,7 @@ def _merge_group(group: list[Finding]) -> Finding:
         tool=rep.tool, category=rep.category, rule_id=rule_id, severity=severity,
         message=rep.message, file=rep.file, line=rep.line, package=rep.package,
         aliases=aliases, tools=tools, description=description, url=url,
+        severity_stated=bool(verdicts),
     )
 
 

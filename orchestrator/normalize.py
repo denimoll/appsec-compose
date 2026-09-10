@@ -93,6 +93,9 @@ class Finding:
     nuclei: bool = False              # Nuclei template exists
     exploitable: bool = False         # kev or poc or nuclei
     scanner_severity: str = ""        # original severity, if reprioritized
+    # True when the tool stated this severity itself, rather than us deriving
+    # it from a CVSS score or a coarse SARIF level. Merging prefers verdicts.
+    severity_stated: bool = False
 
     def __post_init__(self):
         if not self.tools:
@@ -217,8 +220,9 @@ def _parse_sarif(path: Path, tool: str, category: str) -> list[Finding]:
             # Severity: the tool's own verdict first, then CVSS from the result
             # or the rule, then the coarse SARIF level. CVSS is a fallback, not
             # an override — see _tool_severity.
+            stated = _tool_severity(rule)
             sev = (
-                _tool_severity(rule)
+                stated
                 or _security_severity(res.get("properties") or {})
                 or _security_severity(rule.get("properties") or {})
                 or _LEVEL_TO_SEVERITY.get(res.get("level", "warning"), "medium")
@@ -256,6 +260,7 @@ def _parse_sarif(path: Path, tool: str, category: str) -> list[Finding]:
                 tool=tool, category=category, rule_id=str(rule_id), severity=sev,
                 message=msg or str(rule_id), file=file_path, line=line,
                 package=package, description=description, url=url,
+                severity_stated=stated is not None,
             ))
     return findings
 
@@ -292,6 +297,8 @@ def _parse_grype_json(path: Path, tool: str, category: str) -> list[Finding]:
             tool=tool, category=category, rule_id=str(vid), severity=sev,
             message=f"{vid} in {package or name}", file=file_path, line=None,
             package=package, aliases=aliases, description=description, url=url,
+            # Grype's native JSON carries its own verdict, not a raw score.
+            severity_stated=True,
         ))
     return findings
 
