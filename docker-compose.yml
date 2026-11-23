@@ -71,7 +71,7 @@ x-sh: &sh
 services:
   # ---- SAST -------------------------------------------------------------
   semgrep:
-    image: ${SEMGREP_IMAGE:-semgrep/semgrep:1.183.0}
+    image: ${SEMGREP_IMAGE:-semgrep/semgrep:1.185.0}
     <<: *sh
     # SEMGREP_CONFIGS = one or more `--config <ref>` built by render-env from
     # scan-config.yml (default pack, custom registry refs, `auto` stack-detect,
@@ -97,7 +97,7 @@ services:
   # (ASS_DIFF_SCA), over the whole repo; the config scan reads only the changed
   # IaC files, mounted at /iac (ASS_DIFF_IAC).
   trivy:
-    image: ${TRIVY_IMAGE:-aquasec/trivy:0.76.1}
+    image: ${TRIVY_IMAGE:-aquasec/trivy:0.76.2}
     <<: *sh
     command:
       - |
@@ -173,7 +173,7 @@ services:
 
   # ---- IaC (deeper policy coverage than Trivy config) -------------------
   checkov:
-    image: ${CHECKOV_IMAGE:-bridgecrew/checkov:3.4.0}
+    image: ${CHECKOV_IMAGE:-bridgecrew/checkov:3.4.5}
     <<: *sh
     # checkov prints an ASCII banner to stdout, so we can't redirect stdout to
     # the report. Write to a dir (clean `results_sarif.sarif`) and rename it.
@@ -208,7 +208,7 @@ services:
 
   # ---- SCA (alternative) -----------------------------------------------
   grype:
-    image: ${GRYPE_IMAGE:-anchore/grype:v0.121.0}
+    image: ${GRYPE_IMAGE:-anchore/grype:v0.121.3}
     # entrypoint is `grype`; default exit code is 0. SARIF is the native ASPM
     # artifact; the JSON carries relatedVulnerabilities (GHSA<->CVE aliases) and
     # package info that the collector uses for cross-tool SCA de-duplication.
@@ -235,7 +235,7 @@ services:
 
   # ---- Secrets (alternative) -------------------------------------------
   trufflehog:
-    image: ${TRUFFLEHOG_IMAGE:-trufflesecurity/trufflehog:3.99.7}
+    image: ${TRUFFLEHOG_IMAGE:-trufflesecurity/trufflehog:3.99.9}
     <<: *sh
     # TruffleHog has no SARIF output; it emits JSON lines. We keep the raw JSON
     # as the native report and the collector generates trufflehog.sarif from it.
@@ -253,7 +253,7 @@ services:
   # ---- SBOM (alternative generator) ------------------------------------
   # Emits both CycloneDX and SPDX. Target is dir:/code or a container image.
   syft:
-    image: ${SYFT_IMAGE:-anchore/syft:v1.55.0}
+    image: ${SYFT_IMAGE:-anchore/syft:v1.57.1}
     command:
       - "scan"
       - "${ASS_SYFT_TARGET:-dir:/code}"
@@ -285,7 +285,7 @@ services:
     volumes: *iac-volumes
 
   kics:
-    image: ${KICS_IMAGE:-checkmarx/kics:v2.2.0}
+    image: ${KICS_IMAGE:-checkmarx/kics:v2.2.1}
     <<: *sh
     # Checkmarx KICS: a second IaC policy engine. Runs without network
     # (verified with --network none). --disable-secrets: Gitleaks and Trivy
@@ -306,7 +306,7 @@ services:
 
   # ---- SCA (alternative, OSV database) ---------------------------------
   osv:
-    image: ${OSV_IMAGE:-ghcr.io/google/osv-scanner:v2.7.0}
+    image: ${OSV_IMAGE:-ghcr.io/google/osv-scanner:v2.7.1}
     <<: *sh
     # OSV ruleId is the CVE, so findings de-duplicate against Trivy/Grype.
     # Needs network (queries the OSV database); not for offline mode.
@@ -334,7 +334,7 @@ services:
   # the inputs), else the fallback render-env generates (/excludes/zizmor.yml).
   # --format sarif already keeps findings out of the exit code.
   zizmor:
-    image: ${ZIZMOR_IMAGE:-ghcr.io/zizmorcore/zizmor:1.31.1}
+    image: ${ZIZMOR_IMAGE:-ghcr.io/zizmorcore/zizmor:1.32.0}
     <<: *sh
     command:
       - >-

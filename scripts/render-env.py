@@ -53,17 +53,17 @@ LOCK = ROOT / "image-digests.lock"
 
 # tool -> (docker repo, default version, env-var prefix)
 TOOLS = {
-    "semgrep": ("semgrep/semgrep", "1.183.0", "SEMGREP"),
-    "trivy": ("aquasec/trivy", "0.76.1", "TRIVY"),
+    "semgrep": ("semgrep/semgrep", "1.185.0", "SEMGREP"),
+    "trivy": ("aquasec/trivy", "0.76.2", "TRIVY"),
     "gitleaks": ("zricethezav/gitleaks", "v8.30.1", "GITLEAKS"),
-    "checkov": ("bridgecrew/checkov", "3.4.0", "CHECKOV"),
-    "grype": ("anchore/grype", "v0.121.0", "GRYPE"),
-    "trufflehog": ("trufflesecurity/trufflehog", "3.99.7", "TRUFFLEHOG"),
-    "syft": ("anchore/syft", "v1.55.0", "SYFT"),
+    "checkov": ("bridgecrew/checkov", "3.4.5", "CHECKOV"),
+    "grype": ("anchore/grype", "v0.121.3", "GRYPE"),
+    "trufflehog": ("trufflesecurity/trufflehog", "3.99.9", "TRUFFLEHOG"),
+    "syft": ("anchore/syft", "v1.57.1", "SYFT"),
     "hadolint": ("hadolint/hadolint", "v2.15.1-alpine", "HADOLINT"),
-    "osv": ("ghcr.io/google/osv-scanner", "v2.7.0", "OSV"),
-    "zizmor": ("ghcr.io/zizmorcore/zizmor", "1.31.1", "ZIZMOR"),
-    "kics": ("checkmarx/kics", "v2.2.0", "KICS"),
+    "osv": ("ghcr.io/google/osv-scanner", "v2.7.1", "OSV"),
+    "zizmor": ("ghcr.io/zizmorcore/zizmor", "1.32.0", "ZIZMOR"),
+    "kics": ("checkmarx/kics", "v2.2.1", "KICS"),
 }
 
 # Registry pack fetched offline by preload.sh; used as a local file when offline.
